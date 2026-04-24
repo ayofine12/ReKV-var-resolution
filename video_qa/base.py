@@ -17,7 +17,7 @@ from transformers import (
 import logzero
 from logzero import logger
 
-from model import llava_onevision_rekv, video_llava_rekv, longva_rekv
+from model import llava_onevision_rekv, video_llava_rekv, longva_rekv, qwen2_5_vl_rekv
 
 
 MODELS = {
@@ -49,6 +49,10 @@ MODELS = {
         'load_func': longva_rekv.load_model,
         'model_path': 'model_zoo/LongVA-7B',
     },
+    'qwen2_5_vl_7b': {
+        'load_func': qwen2_5_vl_rekv.load_model,
+        'model_path': '/mnt/models/qwen/Qwen2.5-VL-7B-Instruct',
+    },
 }
 
 
@@ -67,17 +71,75 @@ class BaseVQA:
         assert chunk_size <= retrieve_size, f'chunk_size: {chunk_size}, retrieve_size: {retrieve_size}'
         self.retrieve_size = retrieve_size
         self.chunk_size = chunk_size
+        self.choice_letters = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']
 
         self.num_chunks = num_chunks
         self.chunk_idx = chunk_idx
         if num_chunks is not None:
             anno = self.get_chunk(anno, num_chunks, chunk_idx)
+        anno = self.normalize_anno_schema(anno)
         self.anno = anno
-        self.eval_grounding = 'temporal_windows' in anno[0]['conversations'][0]
+        self.eval_grounding = (
+            bool(anno)
+            and 'conversations' in anno[0]
+            and len(anno[0]['conversations']) > 0
+            and 'temporal_windows' in anno[0]['conversations'][0]
+        )
 
         self.save_dir = save_dir
-        self.choice_letters = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']
         self.record = {(self.retrieve_size, self.chunk_size): []}
+
+    def normalize_anno_schema(self, anno):
+        if not anno:
+            return anno
+        first = anno[0]
+        if 'conversations' in first:
+            return anno
+        if 'qa' in first and 'downloaded_video_path' in first:
+            return [self.convert_lvbench_sample(sample) for sample in anno]
+        return anno
+
+    def convert_lvbench_sample(self, sample):
+        conversations = []
+        for qa in sample.get('qa', []):
+            question_text, choices = self.parse_multiple_choice_question(qa['question'])
+            conv = {
+                'question': question_text,
+                'answer': qa.get('answer'),
+                'question_type': ', '.join(qa.get('question_type', [])),
+            }
+            if choices:
+                conv['choices'] = choices
+            conversations.append(conv)
+        return {
+            'video_id': sample.get('key'),
+            'video_path': sample.get('downloaded_video_path'),
+            'conversations': conversations,
+        }
+
+    def parse_multiple_choice_question(self, question):
+        lines = [line.strip() for line in question.splitlines() if line.strip()]
+        if len(lines) <= 1:
+            return question.strip(), []
+
+        choice_prefixes = tuple(f"({letter})" for letter in self.choice_letters)
+        choice_start = None
+        for idx, line in enumerate(lines):
+            if line.startswith(choice_prefixes):
+                choice_start = idx
+                break
+
+        if choice_start is None:
+            return question.strip(), []
+
+        question_text = ' '.join(lines[:choice_start]).strip()
+        choices = []
+        for line in lines[choice_start:]:
+            if line.startswith(choice_prefixes):
+                choices.append(line[3:].strip())
+            elif choices:
+                choices[-1] = f"{choices[-1]} {line}".strip()
+        return question_text, choices
 
     def split_list(self, lst, n):
         """Split a list into n (roughly) equal-sized chunks"""
@@ -191,6 +253,7 @@ def work(QA_CLASS):
     parser.add_argument("--retrieve_chunk_size", type=int, default=1)
     parser.add_argument("--debug", type=str2bool, nargs='?', const=True, default=True)
     args = parser.parse_args()
+    args.model = args.model.strip()
 
     if not args.debug:
         logzero.loglevel(logging.INFO)

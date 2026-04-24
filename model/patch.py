@@ -45,6 +45,13 @@ def patch_hf(
     from transformers import LlamaForCausalLM, MistralForCausalLM, Qwen2ForCausalLM, Qwen2Model
     from transformers.models.llama.modeling_llama import LlamaAttention, LlamaModel, BaseModelOutputWithPast
 
+    def get_decoder_root(model):
+        if hasattr(model, "model") and hasattr(model.model, "layers"):
+            return model.model
+        if hasattr(model, "layers") and hasattr(model, "embed_tokens"):
+            return model
+        return None
+
     def model_forward(
         self,
         input_ids: torch.LongTensor = None,
@@ -131,48 +138,110 @@ def patch_hf(
             attentions=all_self_attns,
         )
 
+    def qwen2_5_decoder_forward(
+        self,
+        hidden_states: torch.Tensor,
+        attention_mask = None,
+        position_ids = None,
+        past_key_value = None,
+        output_attentions: bool = False,
+        use_cache: bool = False,
+        **kwargs,
+    ):
+        residual = hidden_states
+        hidden_states = self.input_layernorm(hidden_states)
+
+        attn_output, attn_weights, present_key_value = self.self_attn(
+            hidden_states=hidden_states,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_value=past_key_value,
+            output_attentions=output_attentions,
+            use_cache=use_cache,
+            **kwargs,
+        )
+        hidden_states = residual + attn_output
+
+        residual = hidden_states
+        hidden_states = self.post_attention_layernorm(hidden_states)
+        hidden_states = self.mlp(hidden_states)
+        hidden_states = residual + hidden_states
+
+        outputs = (hidden_states,)
+        if output_attentions:
+            outputs += (attn_weights,)
+        if use_cache:
+            outputs += (present_key_value,)
+        return outputs
+
     forward = huggingface_forward(rekv_attention_forward(**attn_kwargs))
 
+    decoder_root = None
+    DecoderLayer = None
     if isinstance(model, LlamaForCausalLM):
-        Attention = model.model.layers[0].self_attn.__class__
-        Model = model.model.__class__
+        decoder_root = model.model
     elif isinstance(model, MistralForCausalLM):
-        Attention = model.model.layers[0].self_attn.__class__
-        Model = model.model.__class__
+        decoder_root = model.model
     elif isinstance(model, Qwen2ForCausalLM) or isinstance(model, Qwen2Model):
-        Attention = model.model.layers[0].self_attn.__class__
-        Model = model.model.__class__
+        decoder_root = get_decoder_root(model)
+    elif model.__class__.__name__ == "Qwen2_5_VLTextModel":
+        decoder_root = get_decoder_root(model)
+        DecoderLayer = decoder_root.layers[0].__class__
     elif model.__class__.__name__ == "MiniCPMForCausalLM":
-        Attention = model.model.layers[0].self_attn.__class__
-        Model = model.model.__class__
+        decoder_root = model.model
     else:
         raise ValueError(f"Only supports llama, mistral and qwen2 models, not {model.__class__.__name__}.")
 
-    hf_rope = model.model.layers[0].self_attn.rotary_emb 
+    Attention = decoder_root.layers[0].self_attn.__class__
+    Model = decoder_root.__class__
+
+    hf_rope = getattr(decoder_root.layers[0].self_attn, "rotary_emb", None)
+    if hf_rope is None:
+        hf_rope = getattr(decoder_root, "rotary_emb", None)
+    rope_config = getattr(hf_rope, "config", None)
+    if rope_config is None:
+        rope_config = getattr(decoder_root, "config", None)
+
     if isinstance(hf_rope, Qwen2RotaryEmbedding):
         base = hf_rope.base
         distance_scale = 1.0
         dim = hf_rope.dim
     else:
-        base = hf_rope.config.rope_theta
+        base = getattr(rope_config, "rope_theta", None)
+        if base is None:
+            rope_parameters = getattr(rope_config, "rope_parameters", None)
+            if rope_parameters is None:
+                rope_parameters = getattr(getattr(model, "config", None), "rope_parameters", None)
+            if rope_parameters is not None:
+                base = rope_parameters.get("rope_theta")
+        if base is None:
+            base = 10000.0
         distance_scale = distance_scale if distance_scale is not None else 1.0
-        partial_rotary_factor = hf_rope.config.partial_rotary_factor if hasattr(hf_rope.config, "partial_rotary_factor") else 1.0
-        dim = int((hf_rope.config.hidden_size // hf_rope.config.num_attention_heads) * partial_rotary_factor)
+        partial_rotary_factor = getattr(rope_config, "partial_rotary_factor", 1.0)
+        hidden_size = getattr(rope_config, "hidden_size", None)
+        num_attention_heads = getattr(rope_config, "num_attention_heads", None)
+        if hidden_size is None or num_attention_heads is None:
+            hidden_size = model.config.hidden_size
+            num_attention_heads = model.config.num_attention_heads
+        dim = int((hidden_size // num_attention_heads) * partial_rotary_factor)
     rope = RotaryEmbeddingESM(
         dim,
         base,
         distance_scale
     )
-    model.model.position_bias = rope
+    decoder_root.position_bias = rope
 
     def set_forward(m):
         if isinstance(m, Attention):
             m._old_forward = m.forward
             m.forward = forward.__get__(m, Attention)
+        if DecoderLayer is not None and isinstance(m, DecoderLayer):
+            m._old_forward = m.forward
+            m.forward = qwen2_5_decoder_forward.__get__(m, DecoderLayer)
 
     model.apply(set_forward)
 
-    model.model._old_forward = model.model.forward
-    model.model.forward = model_forward.__get__(model.model, Model)
+    decoder_root._old_forward = decoder_root.forward
+    decoder_root.forward = model_forward.__get__(decoder_root, Model)
 
     return model
