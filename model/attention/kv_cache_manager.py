@@ -579,8 +579,9 @@ class ContextManager:
 
         # offload context KV to CPU
         if self.init_exc:
-            assert global_remainder_len % self.block_size == 0, f'global_remainder_len: {global_remainder_len}, block_size: {self.block_size}'
-            while global_remainder_len > 0:
+            num_full_blocks = global_remainder_len // self.block_size
+            while num_full_blocks > 0:
+                num_full_blocks -= 1
                 global_remainder_len -= self.block_size
 
                 # Context KV-Cache
@@ -682,7 +683,12 @@ class ContextManager:
 
         # update global remainder
         assert self._global_remainder_ed == self.global_remainder[0].size(-2)
-        assert not self.init_exc or self._global_remainder_st == self._global_remainder_ed, f'self.init_exc: {self.init_exc}, global_remainder_st: {self._global_remainder_st}, global_remainder_ed: {self._global_remainder_ed}'
+        if self.init_exc:
+            remainder_len = self._global_remainder_ed - self._global_remainder_st
+            assert remainder_len < self.block_size, (
+                f'self.init_exc: {self.init_exc}, remainder_len: {remainder_len}, block_size: {self.block_size}, '
+                f'global_remainder_st: {self._global_remainder_st}, global_remainder_ed: {self._global_remainder_ed}'
+            )
         with torch.cuda.stream(GLOBAL_STREAM):
             self.global_remainder = (
                 self.global_remainder[0][:, :, self._global_remainder_st:, :],

@@ -51,7 +51,10 @@ class ReKVOfflineVQA(BaseVQA):
                 choices = sample['choices']
                 if answer is None:  # FIXME: an ugly fix for some benchmarks do not provide GT
                     answer = choices[0]
-                correct_choice = self.choice_letters[choices.index(answer)]
+                if answer in self.choice_letters[:len(choices)]:
+                    correct_choice = answer
+                else:
+                    correct_choice = self.choice_letters[choices.index(answer)]
                 qa_results = self.video_close_qa(question, choices, correct_choice)
                 self.record[(self.retrieve_size, self.chunk_size)].append({
                     'video_id': video_sample['video_id'],

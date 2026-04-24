@@ -249,6 +249,7 @@ def work(QA_CLASS):
     parser.add_argument("--anno_path", type=str, required=True)
     parser.add_argument("--model", type=str, default="llava_ov_7b")
     parser.add_argument("--n_local", type=int, default=15000)
+    parser.add_argument("--local_block_count", type=int, default=None)
     parser.add_argument("--retrieve_size", type=int, default=64)
     parser.add_argument("--retrieve_chunk_size", type=int, default=1)
     parser.add_argument("--debug", type=str2bool, nargs='?', const=True, default=True)
@@ -269,12 +270,15 @@ def work(QA_CLASS):
     model_path = MODELS[args.model]['model_path']
     load_func = MODELS[args.model]['load_func']
     logger.info(f"Loading VideoQA model: {model_path}")
-    videoqa_model, videoqa_processor = load_func(
+    load_kwargs = dict(
         model_path=model_path,
         n_local=args.n_local,
         topk=args.retrieve_size,
         chunk_size=args.retrieve_chunk_size,
     )
+    if args.model == "qwen2_5_vl_7b":
+        load_kwargs["local_block_count"] = args.local_block_count
+    videoqa_model, videoqa_processor = load_func(**load_kwargs)
 
     # Load ground truth file
     anno = json.load(open(args.anno_path))

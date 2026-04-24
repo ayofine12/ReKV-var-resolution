@@ -104,7 +104,7 @@ class Qwen2_5_VL_ReKV(Qwen2_5_VLForConditionalGeneration, Abstract_ReKV):
 
 
 def load_model(model_path='/mnt/models/qwen/Qwen2.5-VL-7B-Instruct',
-               n_init=None, n_local=None, topk=64, chunk_size=1, frame_size=224):
+               n_init=None, n_local=None, local_block_count=None, topk=64, chunk_size=1, frame_size=224):
     device = 'cuda'
     processor = AutoProcessor.from_pretrained(
         model_path,
@@ -116,12 +116,20 @@ def load_model(model_path='/mnt/models/qwen/Qwen2.5-VL-7B-Instruct',
         f"frame_size must be divisible by patch_size * merge_size ({spatial_unit}), got {frame_size}"
     )
     n_frame_tokens = (frame_size // spatial_unit) ** 2
+    if local_block_count is not None:
+        if local_block_count < 1:
+            raise ValueError(f"local_block_count must be positive, got {local_block_count}.")
+        resolved_n_local = local_block_count * n_frame_tokens
+    else:
+        resolved_n_local = n_local
+    if resolved_n_local is None:
+        raise ValueError("Either n_local or local_block_count must be provided.")
 
     init_prompt = '<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\n'
     init_prompt_ids = processor.tokenizer(init_prompt, return_tensors="pt").input_ids.to(device)
     inf_llm_config = {
         'n_init': init_prompt_ids.shape[1] if n_init is None else n_init,
-        'n_local': n_local,
+        'n_local': resolved_n_local,
         'fattn': True,
         'block_size': n_frame_tokens,
         'topk': topk,
@@ -141,7 +149,7 @@ def load_model(model_path='/mnt/models/qwen/Qwen2.5-VL-7B-Instruct',
         processor=processor,
         n_frame_tokens=n_frame_tokens,
         init_prompt_ids=init_prompt_ids,
-        n_local=n_local,
+        n_local=resolved_n_local,
         topk=topk,
         chunk_size=chunk_size,
     )
@@ -151,6 +159,7 @@ def load_model(model_path='/mnt/models/qwen/Qwen2.5-VL-7B-Instruct',
         logger.info(f'{k}: {v}')
     logger.info(f'frame_size: {frame_size}')
     logger.info(f'n_frame_tokens: {n_frame_tokens}')
+    logger.info(f'local_block_count: {local_block_count}')
 
     model.eval()
     return model, processor
