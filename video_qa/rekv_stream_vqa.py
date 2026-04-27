@@ -58,7 +58,7 @@ class ReKVStreamVQA(BaseVQA):
         
             # OpenQA
             qa_results = self.video_open_qa(question, max_new_tokens=256)
-            self.record[(self.retrieve_size, self.chunk_size)].append({
+            self.append_result({
                 'video_id': video_sample['video_id'],
                 'question': question,
                 'answer': answer,

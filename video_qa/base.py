@@ -4,8 +4,8 @@ import json
 import os
 import math
 import argparse
+import csv
 
-import pandas as pd
 import torch
 from tqdm import tqdm
 from decord import VideoReader, cpu
@@ -87,7 +87,20 @@ class BaseVQA:
         )
 
         self.save_dir = save_dir
-        self.record = {(self.retrieve_size, self.chunk_size): []}
+        self.output_path = f'{self.save_dir}/{self.num_chunks}_{self.chunk_idx}.csv'
+        self.csv_fieldnames = [
+            'video_id',
+            'question',
+            'choices',
+            'answer',
+            'correct_choice',
+            'pred_answer',
+            'pred_choice',
+            'qa_acc',
+            'task',
+            'retrieve_size',
+            'chunk_size',
+        ]
 
     def normalize_anno_schema(self, anno):
         if not anno:
@@ -218,14 +231,21 @@ class BaseVQA:
             logger.debug(f'video_id: {video_sample["video_id"]}')
             self.analyze_a_video(video_sample)
 
-        dfs = []
-        for (retrieve_size, chunk_size), dict_list in self.record.items():
-            df = pd.DataFrame(dict_list)
-            df['retrieve_size'] = retrieve_size
-            df['chunk_size'] = chunk_size
-            dfs.append(df)
-        final_df = pd.concat(dfs, ignore_index=True)
-        final_df.to_csv(f'{self.save_dir}/{self.num_chunks}_{self.chunk_idx}.csv', index=False)
+    def append_result(self, row):
+        normalized_row = {field: '' for field in self.csv_fieldnames}
+        normalized_row.update(row)
+        normalized_row['retrieve_size'] = self.retrieve_size
+        normalized_row['chunk_size'] = self.chunk_size
+        for key, value in list(normalized_row.items()):
+            if isinstance(value, (list, dict)):
+                normalized_row[key] = json.dumps(value, ensure_ascii=False)
+
+        file_exists = os.path.exists(self.output_path)
+        with open(self.output_path, 'a', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=self.csv_fieldnames)
+            if not file_exists:
+                writer.writeheader()
+            writer.writerow(normalized_row)
 
 
 def str2bool(value):

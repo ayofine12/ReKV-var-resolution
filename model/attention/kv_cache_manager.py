@@ -186,6 +186,38 @@ class VectorTensor:
 GLOBAL_STREAM = None
 
 
+class ThreeBranchCache:
+    def __init__(
+        self,
+        init_k: torch.Tensor,
+        init_v: torch.Tensor,
+        retrieved_k: torch.Tensor,
+        retrieved_v: torch.Tensor,
+        local_k: Optional[torch.Tensor] = None,
+        local_v: Optional[torch.Tensor] = None,
+    ):
+        self.init_k = init_k
+        self.init_v = init_v
+        self.retrieved_k = retrieved_k
+        self.retrieved_v = retrieved_v
+        self.local_k = local_k
+        self.local_v = local_v
+
+    def with_local_cache(self, local_k: torch.Tensor, local_v: torch.Tensor, n_local: int):
+        if local_k.size(-2) > n_local:
+            local_k = local_k[:, :, -n_local:, :].contiguous()
+            local_v = local_v[:, :, -n_local:, :].contiguous()
+
+        return ThreeBranchCache(
+            init_k=self.init_k,
+            init_v=self.init_v,
+            retrieved_k=self.retrieved_k,
+            retrieved_v=self.retrieved_v,
+            local_k=local_k,
+            local_v=local_v,
+        )
+
+
 class ContextManager:
     def __init__(self, 
                  position_embedding,
@@ -201,7 +233,7 @@ class ContextManager:
         self.n_init = n_init
         self.n_local = n_local
         self.block_size = block_size
-        self.max_cached_block = max_cached_block
+        self.max_cached_block = max(max_cached_block, topk)
         self.exc_block_size = exc_block_size
         assert exc_block_size <= n_local # no global token in input
         self.topk = topk
@@ -343,7 +375,7 @@ class ContextManager:
     def get_retrieved_kv(self, query=None):
         """retrieve context blocks with retrieved_block_indices
         query: (batch_size, num_heads, length, dim_head)
-        return [init_k, retrieved_k] and the respective v
+        return a cache object that keeps init/retrieved/text-local KV separate
         """
 
         if query is not None:  # retrieve based on the attention score between query and context's representative keys
@@ -414,8 +446,17 @@ class ContextManager:
         if self.async_global_stream:
             torch.cuda.current_stream().wait_stream(GLOBAL_STREAM)
 
-        assert global_h_k.size(-2) <= self.n_init + self.n_local
-        return global_h_k, global_h_v 
+        init_k = global_h_k[:, :, :init_ed, :]
+        init_v = global_h_v[:, :, :init_ed, :]
+        retrieved_k = global_h_k[:, :, init_ed:ed, :]
+        retrieved_v = global_h_v[:, :, init_ed:ed, :]
+
+        return ThreeBranchCache(
+            init_k=init_k,
+            init_v=init_v,
+            retrieved_k=retrieved_k,
+            retrieved_v=retrieved_v,
+        )
 
     # Get the indices of the top-k vectors in self.block_k[u] that have the highest similarity with global_h_q[u].
     # ret: batch_size x topk

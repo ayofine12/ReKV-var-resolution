@@ -125,6 +125,8 @@ def load_model(model_path='/mnt/models/qwen/Qwen2.5-VL-7B-Instruct',
     if resolved_n_local is None:
         raise ValueError("Either n_local or local_block_count must be provided.")
 
+    max_cached_block = max(128, topk)
+
     init_prompt = '<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\n'
     init_prompt_ids = processor.tokenizer(init_prompt, return_tensors="pt").input_ids.to(device)
     inf_llm_config = {
@@ -134,7 +136,7 @@ def load_model(model_path='/mnt/models/qwen/Qwen2.5-VL-7B-Instruct',
         'block_size': n_frame_tokens,
         'topk': topk,
         'chunk_size': chunk_size,
-        'max_cached_block': 128,
+        'max_cached_block': max_cached_block,
         'exc_block_size': n_frame_tokens,
         'pin_memory': True,
     }

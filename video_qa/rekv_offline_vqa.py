@@ -45,6 +45,10 @@ class ReKVOfflineVQA(BaseVQA):
             logger.debug(f'sample: {sample}')
             question = sample['question']
             answer = sample['answer']
+            row = {
+                'video_id': video_sample['video_id'],
+                'question': question,
+            }
             
             # QA
             if 'choices' in sample:  # CloseQA
@@ -56,9 +60,7 @@ class ReKVOfflineVQA(BaseVQA):
                 else:
                     correct_choice = self.choice_letters[choices.index(answer)]
                 qa_results = self.video_close_qa(question, choices, correct_choice)
-                self.record[(self.retrieve_size, self.chunk_size)].append({
-                    'video_id': video_sample['video_id'],
-                    'question': question,
+                row.update({
                     'choices': choices,
                     'answer': answer,
                     'correct_choice': correct_choice,
@@ -68,15 +70,15 @@ class ReKVOfflineVQA(BaseVQA):
                 })
             else:  # OpenQA
                 qa_results = self.video_open_qa(question)
-                self.record[(self.retrieve_size, self.chunk_size)].append({
-                    'video_id': video_sample['video_id'],
-                    'question': question,
+                row.update({
                     'answer': answer,
                     'pred_answer': qa_results['pred_answer'],
                 })
 
             if 'question_type' in sample:
-                self.record[(self.retrieve_size, self.chunk_size)][-1]['task'] = sample['question_type']
+                row['task'] = sample['question_type']
+
+            self.append_result(row)
 
 
 if __name__ == "__main__":
