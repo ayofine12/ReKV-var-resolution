@@ -32,4 +32,3 @@ results/*
 !results/.gitkeep
 !tools/*
 !tools/LVBench/*
-!tools/window_retrieve_budget/*
