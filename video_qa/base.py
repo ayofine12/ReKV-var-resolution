@@ -207,13 +207,24 @@ class BaseVQA:
         }
 
     def extract_characters_regex(self, s):
-        s = s.strip()
-        if ")" in s:
-            index = s.index(")")
-            pred = s[index - 1 : index]
-            return pred
-        else:
-            return s[0]
+        s = (s or '').strip()
+        if not s:
+            logger.warning("Empty multiple-choice prediction encountered.")
+            return ''
+        s_upper = s.upper()
+
+        for idx, ch in enumerate(s_upper):
+            if ch == ")" and idx > 0:
+                pred = s_upper[idx - 1]
+                if pred in self.choice_letters:
+                    return pred
+
+        for ch in s_upper:
+            if ch in self.choice_letters:
+                return ch
+
+        logger.warning("Unable to parse multiple-choice prediction: %r", s)
+        return ''
 
     def video_open_qa(self, question, max_new_tokens=1024):
         pass
@@ -258,6 +269,13 @@ def str2bool(value):
     else:
         raise argparse.ArgumentTypeError('Boolean value expected.')
 
+def slice_anno_from_video_id(anno, start_video_id):
+    for idx, sample in enumerate(anno):
+        sample_id = sample.get('video_id') or sample.get('key')
+        if sample_id == start_video_id:
+            return anno[idx:]
+    raise ValueError(f"start_video_id not found in annotation: {start_video_id}")
+
 def work(QA_CLASS):
     logging.set_verbosity_error()
 
@@ -273,6 +291,7 @@ def work(QA_CLASS):
     parser.add_argument("--frame_size", type=int, default=224)
     parser.add_argument("--retrieve_size", type=int, default=64)
     parser.add_argument("--retrieve_chunk_size", type=int, default=1)
+    parser.add_argument("--start_video_id", type=str, default=None)
     parser.add_argument("--debug", type=str2bool, nargs='?', const=True, default=True)
     args = parser.parse_args()
     args.model = args.model.strip()
@@ -304,6 +323,15 @@ def work(QA_CLASS):
 
     # Load ground truth file
     anno = json.load(open(args.anno_path))
+    if args.start_video_id:
+        original_len = len(anno)
+        anno = slice_anno_from_video_id(anno, args.start_video_id)
+        logger.info(
+            "Restarting from video_id=%s (%d -> %d samples)",
+            args.start_video_id,
+            original_len,
+            len(anno),
+        )
 
     retrieve_analyzer = QA_CLASS(
         anno=anno,

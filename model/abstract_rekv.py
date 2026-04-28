@@ -39,25 +39,30 @@ class Abstract_ReKV:
 
     @torch.inference_mode()
     def encode_video(self, video, encode_chunk_size=64):  # video: (Nv, H, W, 3)
-        # encode chunk by chunk
         num_frames = video.shape[0]
-        num_chunks = num_frames // encode_chunk_size
+        effective_chunk_size = min(encode_chunk_size, num_frames)
+        start_idx = 0
 
-        for chunk_idx in range(num_chunks):
-            start_idx = chunk_idx * encode_chunk_size
-            end_idx = start_idx + encode_chunk_size
+        while start_idx < num_frames:
+            current_chunk_size = min(effective_chunk_size, num_frames - start_idx)
+            end_idx = start_idx + current_chunk_size
             chunk_video = video[start_idx:end_idx]
-            self._encode_video_chunk(chunk_video)
-            logger.debug(f'KV-Cache RAM usage: {self.calc_memory_usage() / (1024**3):.1f} GB')
+            try:
+                self._encode_video_chunk(chunk_video)
+                start_idx = end_idx
+                logger.debug(f'KV-Cache RAM usage: {self.calc_memory_usage() / (1024**3):.1f} GB')
+            except AssertionError as exc:
+                if "n_local:" not in str(exc) or current_chunk_size == 1:
+                    raise
+                new_chunk_size = max(1, current_chunk_size // 2)
+                logger.warning(
+                    "Reducing encode_chunk_size from %d to %d because %s",
+                    current_chunk_size,
+                    new_chunk_size,
+                    exc,
+                )
+                effective_chunk_size = new_chunk_size
 
-        # Handle remaining frames
-        remaining_frames = num_frames % encode_chunk_size
-        if remaining_frames > 0:
-            start_idx = num_chunks * encode_chunk_size
-            end_idx = start_idx + remaining_frames
-            remaining_video = video[start_idx:end_idx]
-            self._encode_video_chunk(remaining_video)
-        
         logger.debug(f'KV-Cache RAM usage: {self.calc_memory_usage() / (1024**3):.1f} GB')
 
     @torch.inference_mode()

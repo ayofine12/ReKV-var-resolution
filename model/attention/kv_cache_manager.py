@@ -1,4 +1,5 @@
 import math
+import os
 import torch
 from typing import Optional, Tuple
 
@@ -183,6 +184,71 @@ class VectorTensor:
         return self.length
 
 
+class BlockTensorStorage:
+    def __init__(
+        self,
+        block_shape,
+        element_dtype,
+        pin_memory: bool = False,
+    ):
+        init_cached_size = 16
+        self.data = torch.empty(
+            (init_cached_size,) + block_shape,
+            dtype=element_dtype,
+            device="cpu",
+            pin_memory=pin_memory,
+        )
+        self.length = 0
+        self.cache_size = init_cached_size
+        self.block_shape = block_shape
+        self.event = None
+
+    def append_cache(self):
+        new_cache_size = self.cache_size * 2
+        new_data = torch.empty(
+            (new_cache_size,) + self.block_shape,
+            dtype=self.data.dtype,
+            device="cpu",
+            pin_memory=self.data.is_pinned(),
+        )
+        new_data[:self.cache_size].copy_(self.data)
+        self.data = new_data
+        self.cache_size = new_cache_size
+
+    def append(self, tensor: torch.Tensor):
+        assert tensor.dim() == len(self.block_shape) + 1
+        assert tensor.shape[1:] == self.block_shape, f"{tensor.shape[1:]}, {self.block_shape}"
+        assert tensor.is_contiguous()
+
+        append_l = tensor.size(0)
+        while self.length + append_l > self.cache_size:
+            self.append_cache()
+
+        target = self.data[self.length:self.length + append_l]
+        target.copy_(tensor, non_blocking=tensor.is_cuda)
+        if tensor.is_cuda:
+            event = torch.cuda.Event()
+            event.record(torch.cuda.current_stream())
+            self.event = event
+
+        self.length += append_l
+
+    def get_by_indices(self, indices):
+        if self.event is not None:
+            self.event.synchronize()
+        if not isinstance(indices, torch.Tensor):
+            indices = torch.as_tensor(indices, dtype=torch.long, device="cpu")
+        else:
+            indices = indices.to(device="cpu", dtype=torch.long)
+        return self.data[:self.length].index_select(0, indices)
+
+    def __len__(self):
+        return self.length
+
+    def calculate_cpu_memory(self):
+        return self.length * math.prod(self.block_shape) * self.data.element_size()
+
+
 GLOBAL_STREAM = None
 
 
@@ -244,6 +310,7 @@ class ContextManager:
         self.load_count = 0
         self.async_global_stream = async_global_stream
         self.pin_memory = pin_memory
+        self.use_batched_retrieval_io = os.getenv("REKV_BATCHED_RETRIEVAL_IO", "0") == "1"
         global GLOBAL_STREAM
         if self.async_global_stream and GLOBAL_STREAM is None:
             GLOBAL_STREAM = torch.cuda.Stream()
@@ -319,6 +386,20 @@ class ContextManager:
         self.block_k = [VectorTensor(
             dim_head * self.unit_size, global_k.dtype, global_k.device
         ) for _ in range(self.num_units)]
+        if self.use_batched_retrieval_io:
+            self.offloaded_block_k = [BlockTensorStorage(
+                (self.unit_size_kv, self.block_size, dim_head),
+                global_k.dtype,
+                pin_memory=self.pin_memory,
+            ) for _ in range(self.num_units)]
+            self.offloaded_block_v = [BlockTensorStorage(
+                (self.unit_size_kv, self.block_size, dim_head),
+                global_v.dtype,
+                pin_memory=self.pin_memory,
+            ) for _ in range(self.num_units)]
+        else:
+            self.offloaded_block_k = None
+            self.offloaded_block_v = None
 
         # local KV
         self.local_k = torch.empty((self.num_units, self.unit_size_kv, 0, dim_head), dtype=local_k.dtype, device=local_k.device)  # (batch_size, n_head_kv, 0, dim_head)
@@ -389,34 +470,52 @@ class ContextManager:
 
         with torch.cuda.stream(GLOBAL_STREAM):
             if self.init_exc:  # init KV were loaded in global_h_k, context KV were offloaded in global_blocks
-                # offload LRU blocks
-                for u in range(self.num_units):
-                    num_remove = len(self.cached_blocks[u]) - self.max_cached_block
-                    for b_idx in self.retrieved_block_indices[u]:
-                        if b_idx not in self.cached_blocks[u]:
-                            num_remove += 1
-                    self._remove_lru_blocks(u, num_remove, self.retrieved_block_indices[u])
-
-                self.load_count += 1
-                for u in range(self.num_units):
-                    for b_idx in self.retrieved_block_indices[u]:
-                        self.cached_blocks[u][b_idx] = self.load_count
-                
                 # no need to load init KV
                 init_st = 0
                 init_ed = init_st + self.init_k.size(-2)
                 ed = init_ed
                 assert self.global_buffer_init_st == init_st or self.global_buffer_init_ed == init_ed
 
-                # load retrieved context KV
-                for u in range(self.num_units):
-                    # assert len(self.retrieved_block_indices[u]) == block_num
-                    assert self.retrieved_block_indices[u][-1] < self.num_global_block, f'{self.retrieved_block_indices[u][-1]}, {self.num_global_block}'
-                    for cnt, b_idx in enumerate(self.retrieved_block_indices[u]):
-                        # load global_blocks[u][b_idx] onto GPU and make a copy to (global_h_k, global_h_v)
-                        st = init_ed + cnt * self.block_size
-                        ed = st + self.block_size
-                        self.global_blocks[u][b_idx].load((global_h_k[u, :, st:ed, :], global_h_v[u, :, st:ed, :]))
+                if self.use_batched_retrieval_io:
+                    for u in range(self.num_units):
+                        indices = self.retrieved_block_indices[u]
+                        if len(indices) == 0:
+                            continue
+                        assert indices[-1] < self.num_global_block, f'{indices[-1]}, {self.num_global_block}'
+
+                        selected_k = self.offloaded_block_k[u].get_by_indices(indices)
+                        selected_v = self.offloaded_block_v[u].get_by_indices(indices)
+
+                        selected_k = selected_k.permute(1, 0, 2, 3).contiguous().view(self.unit_size_kv, -1, self.dim_head)
+                        selected_v = selected_v.permute(1, 0, 2, 3).contiguous().view(self.unit_size_kv, -1, self.dim_head)
+
+                        st = init_ed
+                        ed = st + selected_k.size(1)
+                        global_h_k[u, :, st:ed, :].copy_(selected_k, non_blocking=self.pin_memory)
+                        global_h_v[u, :, st:ed, :].copy_(selected_v, non_blocking=self.pin_memory)
+                else:
+                    # offload LRU blocks
+                    for u in range(self.num_units):
+                        num_remove = len(self.cached_blocks[u]) - self.max_cached_block
+                        for b_idx in self.retrieved_block_indices[u]:
+                            if b_idx not in self.cached_blocks[u]:
+                                num_remove += 1
+                        self._remove_lru_blocks(u, num_remove, self.retrieved_block_indices[u])
+
+                    self.load_count += 1
+                    for u in range(self.num_units):
+                        for b_idx in self.retrieved_block_indices[u]:
+                            self.cached_blocks[u][b_idx] = self.load_count
+                    
+                    # load retrieved context KV
+                    for u in range(self.num_units):
+                        # assert len(self.retrieved_block_indices[u]) == block_num
+                        assert self.retrieved_block_indices[u][-1] < self.num_global_block, f'{self.retrieved_block_indices[u][-1]}, {self.num_global_block}'
+                        for cnt, b_idx in enumerate(self.retrieved_block_indices[u]):
+                            # load global_blocks[u][b_idx] onto GPU and make a copy to (global_h_k, global_h_v)
+                            st = init_ed + cnt * self.block_size
+                            ed = st + self.block_size
+                            self.global_blocks[u][b_idx].load((global_h_k[u, :, st:ed, :], global_h_v[u, :, st:ed, :]))
 
             else:  # init KV and context are in self.global_remainder
                 # load init KV
@@ -484,7 +583,7 @@ class ContextManager:
                     global_k = global_k.mean(dim=-2, keepdim=False)  # (batch_size, block_num, dim)
                     logits = torch.matmul(global_k, global_h_q[:, :, None]).squeeze(dim=-1)  # (batch_size, block_num)
             else:  # The local window is already filled, but the number of input frames is less than 'topk'.
-                ret = [list(range(len(self.global_blocks[0]))) for _ in range(self.num_units)]
+                ret = [list(range(self.num_global_block)) for _ in range(self.num_units)]
         else:
             logits = torch.stack([self.block_k[u].get_cosine_similarity(global_h_q[u]) for u in range(self.num_units)])  # (batch_size, block_num)
 
@@ -627,17 +726,23 @@ class ContextManager:
 
                 # Context KV-Cache
                 for u in range(self.num_units):
-                    self.global_blocks[u].append((
-                        MemoryUnit(
-                            (
-                                self.global_remainder[0][u, :, global_remainder_st:global_remainder_st + self.block_size, :],
-                                self.global_remainder[1][u, :, global_remainder_st:global_remainder_st + self.block_size, :]
-                            ),
-                            self.cuda_cache,
-                            False,
-                            self.pin_memory
-                        )
-                    ))
+                    if self.use_batched_retrieval_io:
+                        block_k = self.global_remainder[0][u, :, global_remainder_st:global_remainder_st + self.block_size, :].contiguous().unsqueeze(0)
+                        block_v = self.global_remainder[1][u, :, global_remainder_st:global_remainder_st + self.block_size, :].contiguous().unsqueeze(0)
+                        self.offloaded_block_k[u].append(block_k)
+                        self.offloaded_block_v[u].append(block_v)
+                    else:
+                        self.global_blocks[u].append((
+                            MemoryUnit(
+                                (
+                                    self.global_remainder[0][u, :, global_remainder_st:global_remainder_st + self.block_size, :],
+                                    self.global_remainder[1][u, :, global_remainder_st:global_remainder_st + self.block_size, :]
+                                ),
+                                self.cuda_cache,
+                                False,
+                                self.pin_memory
+                            )
+                        ))
 
                 # NOTE: the average of global_remainder is used as the representative vector.
                 global_block_k = self.global_remainder[0][:, :, global_remainder_st:global_remainder_st + self.block_size, :]
@@ -744,6 +849,12 @@ class ContextManager:
         return self.length
 
     def calculate_cpu_memory(self):
+        if self.use_batched_retrieval_io:
+            memory = 0
+            for u in range(self.num_units):
+                memory += self.offloaded_block_k[u].calculate_cpu_memory()
+                memory += self.offloaded_block_v[u].calculate_cpu_memory()
+            return memory
         memory = 0
         for u in range(self.num_units):
             for block in self.global_blocks[u]:

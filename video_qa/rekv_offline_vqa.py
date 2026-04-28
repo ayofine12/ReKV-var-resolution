@@ -19,7 +19,14 @@ class ReKVOfflineVQA(BaseVQA):
 
     def video_close_qa(self, question, candidates, correct_choice, retrieved_indices=None):
         input_text = self.format_mcqa_prompt(question, candidates)
-        pred_answer = self.qa_model.question_answering(input_text, max_new_tokens=16, retrieved_indices=retrieved_indices)
+        if hasattr(self.qa_model, "multiple_choice_answering"):
+            pred_answer = self.qa_model.multiple_choice_answering(
+                input_text,
+                num_choices=len(candidates),
+                retrieved_indices=retrieved_indices,
+            )
+        else:
+            pred_answer = self.qa_model.question_answering(input_text, max_new_tokens=16, retrieved_indices=retrieved_indices)
         pred_letter = self.extract_characters_regex(pred_answer)
         return {
             'pred_answer': pred_answer.replace('\n', ''),

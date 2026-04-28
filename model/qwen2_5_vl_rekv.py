@@ -45,14 +45,9 @@ class Qwen2_5_VL_ReKV(Qwen2_5_VLForConditionalGeneration, Abstract_ReKV):
         output = self.language_model(inputs_embeds=video_features, past_key_values=self.kv_cache, use_cache=True, return_dict=True)
         self.kv_cache = output.past_key_values
 
-    @torch.inference_mode()
-    def question_answering(self, input_text, max_new_tokens=128, retrieved_indices=None):
+    def _prepare_qa_past_key_values(self, question, retrieved_indices=None):
         device = self.device
-        stop_token_ids = [self.processor.tokenizer.eos_token_id]
-
-        output_ids = []
-
-        input_ids = self.processor.tokenizer(input_text["question"]).input_ids
+        input_ids = self.processor.tokenizer(question).input_ids
         input_ids = torch.as_tensor([input_ids], device=device)
         for layer_kv in self.kv_cache:
             layer_kv.set_retrieval()
@@ -69,6 +64,35 @@ class Qwen2_5_VL_ReKV(Qwen2_5_VLForConditionalGeneration, Abstract_ReKV):
 
         for layer_kv in self.kv_cache:
             layer_kv.reset_retrieval()
+
+        return past_key_values
+
+    def _get_choice_token_ids(self, num_choices):
+        if not hasattr(self, "_choice_token_id_cache"):
+            self._choice_token_id_cache = {}
+
+        cache_key = num_choices
+        if cache_key in self._choice_token_id_cache:
+            return self._choice_token_id_cache[cache_key]
+
+        choice_letters = "ABCDEFGH"[:num_choices]
+        token_ids = []
+        for letter in choice_letters:
+            ids = self.processor.tokenizer(letter, add_special_tokens=False).input_ids
+            if len(ids) != 1:
+                raise ValueError(f"Expected single token for choice letter {letter!r}, got {ids}")
+            token_ids.append(ids[0])
+
+        self._choice_token_id_cache[cache_key] = (choice_letters, token_ids)
+        return self._choice_token_id_cache[cache_key]
+
+    @torch.inference_mode()
+    def question_answering(self, input_text, max_new_tokens=128, retrieved_indices=None):
+        device = self.device
+        stop_token_ids = [self.processor.tokenizer.eos_token_id]
+
+        output_ids = []
+        past_key_values = self._prepare_qa_past_key_values(input_text["question"], retrieved_indices=retrieved_indices)
 
         for i in range(max_new_tokens):
             if i == 0:
@@ -101,6 +125,24 @@ class Qwen2_5_VL_ReKV(Qwen2_5_VLForConditionalGeneration, Abstract_ReKV):
             clean_up_tokenization_spaces=True,
         )
         return output
+
+    @torch.inference_mode()
+    def multiple_choice_answering(self, input_text, num_choices, retrieved_indices=None):
+        device = self.device
+        choice_letters, choice_token_ids = self._get_choice_token_ids(num_choices)
+        past_key_values = self._prepare_qa_past_key_values(input_text["question"], retrieved_indices=retrieved_indices)
+
+        input_ids = self.processor.tokenizer(input_text["prompt"]).input_ids
+        input_ids = torch.as_tensor([input_ids], device=device)
+        inputs_embeds = self.get_input_embeddings()(input_ids)
+        out = self.language_model(inputs_embeds=inputs_embeds, use_cache=True, past_key_values=past_key_values)
+        logits = self.lm_head(out["last_hidden_state"])
+        last_token_logits = logits[0, -1, :]
+
+        choice_token_ids_tensor = torch.as_tensor(choice_token_ids, device=device)
+        choice_logits = last_token_logits.index_select(0, choice_token_ids_tensor)
+        pred_idx = int(torch.argmax(choice_logits).item())
+        return choice_letters[pred_idx]
 
 
 def load_model(model_path='/mnt/models/qwen/Qwen2.5-VL-7B-Instruct',
