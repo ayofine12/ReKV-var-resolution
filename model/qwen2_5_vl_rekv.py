@@ -40,6 +40,16 @@ class Qwen2_5_VL_ReKV(Qwen2_5_VLForConditionalGeneration, Abstract_ReKV):
     def _encode_video_chunk(self, video_chunk):
         pixel_values_videos, video_grid_thw = self._prepare_video_inputs(video_chunk)
         video_features = self._get_video_features(pixel_values_videos, video_grid_thw)
+        spatial_tokens = int(
+            video_grid_thw[0, 1].item()
+            * video_grid_thw[0, 2].item()
+            // (self.processor.video_processor.merge_size ** 2)
+        )
+        assert spatial_tokens == self.n_frame_tokens, (
+            f"Expected {self.n_frame_tokens} tokens per temporal video block, got {spatial_tokens}. "
+            f"video_grid_thw={video_grid_thw.tolist()}. "
+            "Frames should be resized to the configured square frame_size before Qwen processing."
+        )
         assert self.n_local >= video_features.shape[1], f'n_local: {self.n_local}, video_features: {video_features.shape[1]}'
 
         output = self.language_model(inputs_embeds=video_features, past_key_values=self.kv_cache, use_cache=True, return_dict=True)

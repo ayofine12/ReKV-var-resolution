@@ -6,7 +6,9 @@ import math
 import argparse
 import csv
 
+import numpy as np
 import torch
+import torch.nn.functional as F
 from tqdm import tqdm
 from decord import VideoReader, cpu
 from transformers import (
@@ -60,7 +62,8 @@ class BaseVQA:
     def __init__(self, anno, save_dir, sample_fps,
                  qa_model, qa_processor=None,
                  num_chunks=None, chunk_idx=None,
-                 retrieve_size=64, chunk_size=1) -> None:
+                 retrieve_size=64, chunk_size=1,
+                 resize_frame_size=None) -> None:
         
         self.sample_fps = sample_fps
 
@@ -71,6 +74,7 @@ class BaseVQA:
         assert chunk_size <= retrieve_size, f'chunk_size: {chunk_size}, retrieve_size: {retrieve_size}'
         self.retrieve_size = retrieve_size
         self.chunk_size = chunk_size
+        self.resize_frame_size = resize_frame_size
         self.choice_letters = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']
 
         self.num_chunks = num_chunks
@@ -163,11 +167,28 @@ class BaseVQA:
         chunks = self.split_list(lst, n)
         return chunks[k]
 
+    def resize_video_to_square(self, video, frame_size):
+        if video.shape[1] == frame_size and video.shape[2] == frame_size:
+            return video
+
+        resized = np.empty((video.shape[0], frame_size, frame_size, video.shape[3]), dtype=video.dtype)
+        batch_size = 256
+        for st in range(0, video.shape[0], batch_size):
+            ed = min(st + batch_size, video.shape[0])
+            frames = torch.from_numpy(video[st:ed]).permute(0, 3, 1, 2).float()
+            frames = F.interpolate(frames, size=(frame_size, frame_size), mode='bilinear', align_corners=False)
+            frames = frames.round().clamp(0, 255).to(torch.uint8)
+            resized[st:ed] = frames.permute(0, 2, 3, 1).numpy()
+
+        return resized
+
     def load_video(self, video_path):
         vr = VideoReader(video_path, ctx=cpu(0))
         fps = round(vr.get_avg_fps())
         frame_idx = [i for i in range(0, len(vr), int(fps / self.sample_fps))]
         video = vr.get_batch(frame_idx).asnumpy()
+        if self.resize_frame_size is not None:
+            video = self.resize_video_to_square(video, self.resize_frame_size)
         logger.debug(f'video shape: {video.shape}')
         return video
     
@@ -343,6 +364,7 @@ def work(QA_CLASS):
         num_chunks=args.num_chunks,
         chunk_idx=args.chunk_idx,
         save_dir=args.save_dir,
+        resize_frame_size=args.frame_size if args.model == "qwen2_5_vl_7b" else None,
     )
 
     retrieve_analyzer.analyze(debug=args.debug)
