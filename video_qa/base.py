@@ -63,7 +63,8 @@ class BaseVQA:
                  qa_model, qa_processor=None,
                  num_chunks=None, chunk_idx=None,
                  retrieve_size=64, chunk_size=1,
-                 resize_frame_size=None) -> None:
+                 resize_frame_size=None,
+                 save_choice_scores=False) -> None:
         
         self.sample_fps = sample_fps
 
@@ -75,6 +76,7 @@ class BaseVQA:
         self.retrieve_size = retrieve_size
         self.chunk_size = chunk_size
         self.resize_frame_size = resize_frame_size
+        self.save_choice_scores = save_choice_scores
         self.choice_letters = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']
 
         self.num_chunks = num_chunks
@@ -105,6 +107,18 @@ class BaseVQA:
             'retrieve_size',
             'chunk_size',
         ]
+        if self.save_choice_scores:
+            self.csv_fieldnames.extend([
+                'choice_logits',
+                'choice_logprobs',
+                'choice_probs',
+                'top1_prob',
+                'top2_prob',
+                'prob_margin',
+                'logit_margin',
+                'choice_entropy',
+                'normalized_choice_entropy',
+            ])
 
     def normalize_anno_schema(self, anno):
         if not anno:
@@ -313,6 +327,7 @@ def work(QA_CLASS):
     parser.add_argument("--retrieve_size", type=int, default=64)
     parser.add_argument("--retrieve_chunk_size", type=int, default=1)
     parser.add_argument("--start_video_id", type=str, default=None)
+    parser.add_argument("--save_choice_scores", type=str2bool, nargs='?', const=True, default=False)
     parser.add_argument("--debug", type=str2bool, nargs='?', const=True, default=True)
     args = parser.parse_args()
     args.model = args.model.strip()
@@ -365,6 +380,7 @@ def work(QA_CLASS):
         chunk_idx=args.chunk_idx,
         save_dir=args.save_dir,
         resize_frame_size=args.frame_size if args.model == "qwen2_5_vl_7b" else None,
+        save_choice_scores=args.save_choice_scores,
     )
 
     retrieve_analyzer.analyze(debug=args.debug)

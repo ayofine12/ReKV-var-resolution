@@ -19,20 +19,38 @@ class ReKVOfflineVQA(BaseVQA):
 
     def video_close_qa(self, question, candidates, correct_choice, retrieved_indices=None):
         input_text = self.format_mcqa_prompt(question, candidates)
+        choice_scores = {}
         if hasattr(self.qa_model, "multiple_choice_answering"):
-            pred_answer = self.qa_model.multiple_choice_answering(
+            mc_kwargs = {
+                'num_choices': len(candidates),
+                'retrieved_indices': retrieved_indices,
+            }
+            if self.save_choice_scores:
+                mc_kwargs['return_scores'] = True
+            mc_output = self.qa_model.multiple_choice_answering(
                 input_text,
-                num_choices=len(candidates),
-                retrieved_indices=retrieved_indices,
+                **mc_kwargs,
             )
+            if isinstance(mc_output, dict):
+                pred_answer = mc_output.get('pred_answer', mc_output.get('pred_choice', ''))
+                choice_scores = {
+                    key: value
+                    for key, value in mc_output.items()
+                    if key not in {'pred_answer', 'pred_choice'}
+                }
+            else:
+                pred_answer = mc_output
         else:
             pred_answer = self.qa_model.question_answering(input_text, max_new_tokens=16, retrieved_indices=retrieved_indices)
+        pred_answer = str(pred_answer).replace('\n', '')
         pred_letter = self.extract_characters_regex(pred_answer)
-        return {
-            'pred_answer': pred_answer.replace('\n', ''),
+        result = {
+            'pred_answer': pred_answer,
             'pred_choice': pred_letter,
             'acc': float(pred_letter == correct_choice),
         }
+        result.update(choice_scores)
+        return result
 
     @torch.inference_mode()
     def analyze_a_video(self, video_sample):
@@ -75,6 +93,18 @@ class ReKVOfflineVQA(BaseVQA):
                     'pred_choice': qa_results['pred_choice'],
                     'qa_acc': qa_results['acc'] * 100,
                 })
+                if self.save_choice_scores:
+                    row.update({
+                        key: qa_results.get(key, '')
+                        for key in self.csv_fieldnames
+                        if key.startswith('choice_') or key in {
+                            'top1_prob',
+                            'top2_prob',
+                            'prob_margin',
+                            'logit_margin',
+                            'normalized_choice_entropy',
+                        }
+                    })
             else:  # OpenQA
                 qa_results = self.video_open_qa(question)
                 row.update({

@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
-Evaluate a saved question-only router bundle on a holdout dataset with fs112/fs224 results.
+Evaluate a saved text-only router bundle on a holdout dataset with fs112/fs224 results.
 """
 
 from __future__ import annotations
 
 import argparse
+import ast
 import csv
 import json
 from collections import Counter
@@ -74,6 +75,52 @@ def load_side(paths: Sequence[str]) -> Dict[Tuple[str, str, str, str], Dict[str,
     return rows
 
 
+def parse_choices(raw: str) -> List[str]:
+    if not raw:
+        return []
+    for parser in (json.loads, ast.literal_eval):
+        try:
+            parsed = parser(raw)
+            if isinstance(parsed, list):
+                return [str(item) for item in parsed]
+        except Exception:
+            pass
+    return [raw]
+
+
+def format_choices(raw: str) -> str:
+    labels = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    lines: List[str] = []
+    for idx, choice in enumerate(parse_choices(raw)):
+        prefix = labels[idx] if idx < len(labels) else str(idx + 1)
+        lines.append(f"({prefix}) {choice}")
+    return "\n".join(lines)
+
+
+def build_router_text(question: str, choices: str, input_mode: str) -> str:
+    if input_mode == "question":
+        return question
+    if input_mode == "question_choices":
+        formatted_choices = format_choices(choices)
+        if formatted_choices:
+            return f"Question:\n{question}\n\nChoices:\n{formatted_choices}"
+        return f"Question:\n{question}"
+    raise ValueError(f"Unsupported input mode: {input_mode}")
+
+
+def build_model_frame(keys: Sequence[Tuple[str, str, str, str]], input_mode: str, feature_column: str) -> pd.DataFrame:
+    if feature_column == "router_text":
+        return pd.DataFrame(
+            {
+                "router_text": [
+                    build_router_text(question=key[1], choices=key[2], input_mode=input_mode)
+                    for key in keys
+                ]
+            }
+        )
+    return pd.DataFrame({"question": [key[1] for key in keys]})
+
+
 def save_predictions(path: Path, rows: List[Dict[str, object]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(rows).to_csv(path, index=False)
@@ -84,6 +131,8 @@ def main() -> None:
     args = parse_args()
     bundle = joblib.load(args.router_bundle)
     pipeline = bundle["pipeline"]
+    input_mode = str(bundle.get("input_mode", "question"))
+    feature_column = str(bundle.get("feature_column", "question"))
     threshold = float(args.override_threshold if args.override_threshold is not None else bundle["min_confidence"])
     default_fs = str(args.override_default_fs if args.override_default_fs is not None else bundle["default_fs"])
 
@@ -93,8 +142,7 @@ def main() -> None:
     if not keys:
         raise ValueError("No overlapping questions between the provided 112 and 224 CSVs.")
 
-    questions = [key[1] for key in keys]
-    proba = pipeline.predict_proba(pd.DataFrame({"question": questions}))
+    proba = pipeline.predict_proba(build_model_frame(keys, input_mode, feature_column))
     classes = list(pipeline.named_steps["model"].classes_)
     idx112 = classes.index(LABEL_112) if LABEL_112 in classes else None
     idx224 = classes.index(LABEL_224) if LABEL_224 in classes else None
@@ -149,7 +197,9 @@ def main() -> None:
         pred_rows.append(
             {
                 "video_id": row112["video_id"],
+                "input_mode": input_mode,
                 "question": row112["question"],
+                "choices": row112.get("choices", ""),
                 "task": row112.get("task", ""),
                 "acc112": acc112,
                 "acc224": acc224,
@@ -171,6 +221,7 @@ def main() -> None:
 
     print("[summary]")
     print(f"n_examples: {len(keys)}")
+    print(f"input_mode: {input_mode}")
     print(f"default_fs: {default_fs}")
     print(f"threshold: {threshold:.2f}")
     print(f"base_acc_112: {100 * (sum(base_acc_112) / len(base_acc_112)):.2f}")

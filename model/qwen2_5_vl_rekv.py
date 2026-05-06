@@ -1,3 +1,5 @@
+import math
+
 import torch
 from logzero import logger
 from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
@@ -137,7 +139,7 @@ class Qwen2_5_VL_ReKV(Qwen2_5_VLForConditionalGeneration, Abstract_ReKV):
         return output
 
     @torch.inference_mode()
-    def multiple_choice_answering(self, input_text, num_choices, retrieved_indices=None):
+    def multiple_choice_answering(self, input_text, num_choices, retrieved_indices=None, return_scores=False):
         device = self.device
         choice_letters, choice_token_ids = self._get_choice_token_ids(num_choices)
         past_key_values = self._prepare_qa_past_key_values(input_text["question"], retrieved_indices=retrieved_indices)
@@ -150,9 +152,50 @@ class Qwen2_5_VL_ReKV(Qwen2_5_VLForConditionalGeneration, Abstract_ReKV):
         last_token_logits = logits[0, -1, :]
 
         choice_token_ids_tensor = torch.as_tensor(choice_token_ids, device=device)
-        choice_logits = last_token_logits.index_select(0, choice_token_ids_tensor)
+        choice_logits = last_token_logits.index_select(0, choice_token_ids_tensor).float()
+        choice_logprobs = torch.log_softmax(choice_logits, dim=0)
+        choice_probs = choice_logprobs.exp()
         pred_idx = int(torch.argmax(choice_logits).item())
-        return choice_letters[pred_idx]
+        pred_answer = choice_letters[pred_idx]
+
+        if not return_scores:
+            return pred_answer
+
+        sorted_probs, sorted_indices = torch.sort(choice_probs, descending=True)
+        sorted_logits = choice_logits.index_select(0, sorted_indices)
+        top1_prob = float(sorted_probs[0].item())
+        top2_prob = float(sorted_probs[1].item()) if num_choices > 1 else 0.0
+        prob_margin = top1_prob - top2_prob
+        logit_margin = (
+            float((sorted_logits[0] - sorted_logits[1]).item())
+            if num_choices > 1
+            else float('inf')
+        )
+        entropy = float((-(choice_probs * choice_logprobs).sum()).item())
+        normalized_entropy = entropy / math.log(num_choices) if num_choices > 1 else 0.0
+
+        return {
+            'pred_answer': pred_answer,
+            'pred_choice': pred_answer,
+            'choice_logits': {
+                letter: float(score.item())
+                for letter, score in zip(choice_letters, choice_logits)
+            },
+            'choice_logprobs': {
+                letter: float(score.item())
+                for letter, score in zip(choice_letters, choice_logprobs)
+            },
+            'choice_probs': {
+                letter: float(score.item())
+                for letter, score in zip(choice_letters, choice_probs)
+            },
+            'top1_prob': top1_prob,
+            'top2_prob': top2_prob,
+            'prob_margin': prob_margin,
+            'logit_margin': logit_margin,
+            'choice_entropy': entropy,
+            'normalized_choice_entropy': normalized_entropy,
+        }
 
 
 def load_model(model_path='/mnt/models/qwen/Qwen2.5-VL-7B-Instruct',

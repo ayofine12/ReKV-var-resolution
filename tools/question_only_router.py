@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-Feasibility test for a question-only fs112 vs fs224 router.
+Feasibility test for a text-only fs112 vs fs224 router.
 
-This script trains a text classifier on question strings only and evaluates
-whether routing between two result sets can improve end-to-end QA accuracy.
+This script trains a text classifier on either question strings only or
+question+choices text, then evaluates whether routing between two result sets
+can improve end-to-end QA accuracy.
 It supports one or more CSVs per side, which is convenient for datasets such
 as MLVU that are split into front/back subsets.
 """
@@ -11,6 +12,7 @@ as MLVU that are split into front/back subsets.
 from __future__ import annotations
 
 import argparse
+import ast
 import csv
 import json
 from collections import Counter
@@ -47,9 +49,15 @@ class RouterExample:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Train/evaluate a question-only 112-vs-224 router.")
+    parser = argparse.ArgumentParser(description="Train/evaluate a text-only 112-vs-224 router.")
     parser.add_argument("--csv-112", nargs="+", required=True, help="One or more result CSVs for fs112.")
     parser.add_argument("--csv-224", nargs="+", required=True, help="One or more result CSVs for fs224.")
+    parser.add_argument(
+        "--input-mode",
+        choices=["question", "question_choices"],
+        default="question",
+        help="Router text input. 'question_choices' uses question plus multiple-choice options.",
+    )
     parser.add_argument(
         "--routing-mode",
         choices=["binary_abstain", "multiclass"],
@@ -103,7 +111,7 @@ def parse_args() -> argparse.Namespace:
         "--top-k-features",
         type=int,
         default=20,
-        help="Number of top question features to print for each routed class when saving a full model.",
+        help="Number of top text features to print for each routed class when saving a full model.",
     )
     return parser.parse_args()
 
@@ -190,6 +198,39 @@ def choose_label(acc112: float, acc224: float) -> str:
     return LABEL_TIE
 
 
+def parse_choices(raw: str) -> List[str]:
+    if not raw:
+        return []
+    for parser in (json.loads, ast.literal_eval):
+        try:
+            parsed = parser(raw)
+            if isinstance(parsed, list):
+                return [str(item) for item in parsed]
+        except Exception:
+            pass
+    return [raw]
+
+
+def format_choices(raw: str) -> str:
+    labels = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    lines: List[str] = []
+    for idx, choice in enumerate(parse_choices(raw)):
+        prefix = labels[idx] if idx < len(labels) else str(idx + 1)
+        lines.append(f"({prefix}) {choice}")
+    return "\n".join(lines)
+
+
+def build_router_text(question: str, choices: str, input_mode: str) -> str:
+    if input_mode == "question":
+        return question
+    if input_mode == "question_choices":
+        formatted_choices = format_choices(choices)
+        if formatted_choices:
+            return f"Question:\n{question}\n\nChoices:\n{formatted_choices}"
+        return f"Question:\n{question}"
+    raise ValueError(f"Unsupported input mode: {input_mode}")
+
+
 def build_pipeline(max_word_features: int, max_char_features: int) -> Pipeline:
     features = ColumnTransformer(
         transformers=[
@@ -202,7 +243,7 @@ def build_pipeline(max_word_features: int, max_char_features: int) -> Pipeline:
                     max_features=max_word_features,
                     sublinear_tf=True,
                 ),
-                "question",
+                "router_text",
             ),
             (
                 "char",
@@ -213,7 +254,7 @@ def build_pipeline(max_word_features: int, max_char_features: int) -> Pipeline:
                     max_features=max_char_features,
                     sublinear_tf=True,
                 ),
-                "question",
+                "router_text",
             ),
         ],
         remainder="drop",
@@ -228,11 +269,12 @@ def build_pipeline(max_word_features: int, max_char_features: int) -> Pipeline:
     return Pipeline([("features", features), ("model", model)])
 
 
-def build_training_frame(examples: Sequence[RouterExample]) -> pd.DataFrame:
+def build_training_frame(examples: Sequence[RouterExample], input_mode: str) -> pd.DataFrame:
     return pd.DataFrame(
         {
             "video_id": [ex.video_id for ex in examples],
             "question": [ex.question for ex in examples],
+            "router_text": [build_router_text(ex.question, ex.choices, input_mode) for ex in examples],
             "task": [ex.task for ex in examples],
             "choices": [ex.choices for ex in examples],
             "correct_choice": [ex.correct_choice for ex in examples],
@@ -299,12 +341,13 @@ def task_oracle_acc(examples: Sequence[RouterExample], default_fs: str) -> float
 def evaluate_cv(
     examples: Sequence[RouterExample],
     pipeline: Pipeline,
+    input_mode: str,
     default_fs: str,
     min_confidence: float,
     n_splits: int,
     routing_mode: str,
 ):
-    df = build_training_frame(examples)
+    df = build_training_frame(examples, input_mode)
 
     splitter, n_splits = select_splitter(df["label"].tolist(), df["video_id"].tolist(), n_splits)
     all_true: List[str] = []
@@ -317,8 +360,8 @@ def evaluate_cv(
         train_df = df.iloc[train_idx]
         test_df = df.iloc[test_idx]
         fit_df = select_fit_frame(train_df, routing_mode)
-        pipeline.fit(fit_df[["question"]], fit_df["label"])
-        proba = pipeline.predict_proba(test_df[["question"]])
+        pipeline.fit(fit_df[["router_text"]], fit_df["label"])
+        proba = pipeline.predict_proba(test_df[["router_text"]])
         classes = list(pipeline.named_steps["model"].classes_)
         max_indices = np.argmax(proba, axis=1)
         raw_preds = [classes[idx] for idx in max_indices]
@@ -337,8 +380,10 @@ def evaluate_cv(
             prediction_rows.append(
                 {
                     "fold": fold_idx,
+                    "input_mode": input_mode,
                     "video_id": row["video_id"],
                     "question": row["question"],
+                    "choices": row["choices"],
                     "task": row["task"],
                     "gold_label": row["label"],
                     "pred_label": pred,
@@ -362,6 +407,7 @@ def evaluate_cv(
         "n_examples": len(examples),
         "n_unique_videos": len(set(df["video_id"])),
         "n_splits": n_splits,
+        "input_mode": input_mode,
         "routing_mode": routing_mode,
         "default_fs": default_fs,
         "base_acc_112": base112,
@@ -391,6 +437,7 @@ def print_summary(report: Dict[str, object]) -> None:
     print(f"n_examples: {report['n_examples']}")
     print(f"n_unique_videos: {report['n_unique_videos']}")
     print(f"n_splits: {report['n_splits']}")
+    print(f"input_mode: {report['input_mode']}")
     print(f"routing_mode: {report['routing_mode']}")
     print(f"default_fs: {report['default_fs']}")
     print(f"base_acc_112: {100 * report['base_acc_112']:.2f}")
@@ -430,11 +477,12 @@ def print_top_features(pipeline: Pipeline, top_k: int) -> None:
 def train_full_model(
     examples: Sequence[RouterExample],
     pipeline: Pipeline,
+    input_mode: str,
     routing_mode: str,
 ) -> Pipeline:
-    df = build_training_frame(examples)
+    df = build_training_frame(examples, input_mode)
     fit_df = select_fit_frame(df, routing_mode)
-    pipeline.fit(fit_df[["question"]], fit_df["label"])
+    pipeline.fit(fit_df[["router_text"]], fit_df["label"])
     return pipeline
 
 
@@ -449,6 +497,7 @@ def save_router_bundle(
     bundle_path: Path,
     pipeline: Pipeline,
     examples: Sequence[RouterExample],
+    input_mode: str,
     routing_mode: str,
     default_fs: str,
     min_confidence: float,
@@ -458,6 +507,8 @@ def save_router_bundle(
     bundle_path.parent.mkdir(parents=True, exist_ok=True)
     bundle = {
         "pipeline": pipeline,
+        "input_mode": input_mode,
+        "feature_column": "router_text",
         "routing_mode": routing_mode,
         "default_fs": default_fs,
         "min_confidence": float(min_confidence),
@@ -484,6 +535,7 @@ def main() -> None:
     report = evaluate_cv(
         examples=examples,
         pipeline=pipeline,
+        input_mode=args.input_mode,
         default_fs=default_fs,
         min_confidence=args.min_confidence,
         n_splits=args.n_splits,
@@ -498,6 +550,7 @@ def main() -> None:
         full_pipeline = train_full_model(
             examples=examples,
             pipeline=full_pipeline,
+            input_mode=args.input_mode,
             routing_mode=args.routing_mode,
         )
         if args.save_model is not None:
@@ -507,6 +560,7 @@ def main() -> None:
                 bundle_path=args.save_router_bundle,
                 pipeline=full_pipeline,
                 examples=examples,
+                input_mode=args.input_mode,
                 routing_mode=args.routing_mode,
                 default_fs=default_fs,
                 min_confidence=args.min_confidence,

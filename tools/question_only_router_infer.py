@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
-Inference helper for a saved question-only router bundle.
+Inference helper for a saved text-only router bundle.
 """
 
 from __future__ import annotations
 
 import argparse
+import ast
 import csv
 import json
 from pathlib import Path
@@ -21,9 +22,15 @@ LABEL_TIE = "tie"
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run a saved question-only router on one or more questions.")
+    parser = argparse.ArgumentParser(description="Run a saved text-only router on one or more questions.")
     parser.add_argument("--router-bundle", type=Path, required=True, help="Path to a saved router bundle.")
     parser.add_argument("--question", action="append", default=[], help="Question text. Can be repeated.")
+    parser.add_argument(
+        "--choices",
+        action="append",
+        default=[],
+        help="Choices for a --question. Can be repeated; aligns by position with --question.",
+    )
     parser.add_argument(
         "--question-file",
         type=Path,
@@ -39,32 +46,83 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def load_questions(question_args: List[str], question_file: Path | None) -> List[str]:
-    questions = list(question_args)
+def parse_choices(raw: str) -> List[str]:
+    if not raw:
+        return []
+    for parser in (json.loads, ast.literal_eval):
+        try:
+            parsed = parser(raw)
+            if isinstance(parsed, list):
+                return [str(item) for item in parsed]
+        except Exception:
+            pass
+    return [raw]
+
+
+def format_choices(raw: str) -> str:
+    labels = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    lines: List[str] = []
+    for idx, choice in enumerate(parse_choices(raw)):
+        prefix = labels[idx] if idx < len(labels) else str(idx + 1)
+        lines.append(f"({prefix}) {choice}")
+    return "\n".join(lines)
+
+
+def build_router_text(question: str, choices: str, input_mode: str) -> str:
+    if input_mode == "question":
+        return question
+    if input_mode == "question_choices":
+        formatted_choices = format_choices(choices)
+        if formatted_choices:
+            return f"Question:\n{question}\n\nChoices:\n{formatted_choices}"
+        return f"Question:\n{question}"
+    raise ValueError(f"Unsupported input mode: {input_mode}")
+
+
+def load_records(question_args: List[str], choices_args: List[str], question_file: Path | None) -> List[Dict[str, str]]:
+    records = [
+        {"question": question, "choices": choices_args[idx] if idx < len(choices_args) else ""}
+        for idx, question in enumerate(question_args)
+        if question.strip()
+    ]
     if question_file is None:
-        if not questions:
+        if not records:
             raise ValueError("Provide at least one --question or a --question-file.")
-        return questions
+        return records
 
     suffix = question_file.suffix.lower()
     if suffix in {".txt", ".md"}:
         with question_file.open() as fh:
-            questions.extend([line.strip() for line in fh if line.strip()])
+            records.extend({"question": line.strip(), "choices": ""} for line in fh if line.strip())
     elif suffix == ".csv":
         with question_file.open(newline="") as fh:
             reader = csv.DictReader(fh)
             if "question" not in reader.fieldnames:
                 raise ValueError("CSV question file must contain a 'question' column.")
-            questions.extend([row["question"].strip() for row in reader if row["question"].strip()])
+            records.extend(
+                {
+                    "question": row["question"].strip(),
+                    "choices": row.get("choices", "").strip(),
+                }
+                for row in reader
+                if row["question"].strip()
+            )
     elif suffix == ".json":
         with question_file.open() as fh:
             data = json.load(fh)
         if isinstance(data, list):
             for item in data:
                 if isinstance(item, str):
-                    questions.append(item.strip())
+                    records.append({"question": item.strip(), "choices": ""})
                 elif isinstance(item, dict) and "question" in item:
-                    questions.append(str(item["question"]).strip())
+                    records.append(
+                        {
+                            "question": str(item["question"]).strip(),
+                            "choices": json.dumps(item.get("choices", ""), ensure_ascii=False)
+                            if isinstance(item.get("choices", ""), list)
+                            else str(item.get("choices", "")),
+                        }
+                    )
                 else:
                     raise ValueError("JSON question list items must be strings or dicts with 'question'.")
         else:
@@ -77,25 +135,38 @@ def load_questions(question_args: List[str], question_file: Path | None) -> List
                     continue
                 item = json.loads(line)
                 if isinstance(item, str):
-                    questions.append(item.strip())
+                    records.append({"question": item.strip(), "choices": ""})
                 elif isinstance(item, dict) and "question" in item:
-                    questions.append(str(item["question"]).strip())
+                    records.append(
+                        {
+                            "question": str(item["question"]).strip(),
+                            "choices": json.dumps(item.get("choices", ""), ensure_ascii=False)
+                            if isinstance(item.get("choices", ""), list)
+                            else str(item.get("choices", "")),
+                        }
+                    )
                 else:
                     raise ValueError("JSONL items must be strings or dicts with 'question'.")
     else:
         raise ValueError(f"Unsupported question file format: {question_file}")
 
-    questions = [q for q in questions if q]
-    if not questions:
+    records = [record for record in records if record["question"]]
+    if not records:
         raise ValueError("No valid questions found.")
-    return questions
+    return records
 
 
-def route_question(bundle: Dict[str, object], question: str) -> Dict[str, object]:
+def route_question(bundle: Dict[str, object], question: str, choices: str = "") -> Dict[str, object]:
     pipeline = bundle["pipeline"]
     threshold = float(bundle["min_confidence"])
     default_fs = str(bundle["default_fs"])
-    proba = pipeline.predict_proba(pd.DataFrame({"question": [question]}))[0]
+    input_mode = str(bundle.get("input_mode", "question"))
+    feature_column = str(bundle.get("feature_column", "question"))
+    if feature_column == "router_text":
+        frame = pd.DataFrame({"router_text": [build_router_text(question, choices, input_mode)]})
+    else:
+        frame = pd.DataFrame({"question": [question]})
+    proba = pipeline.predict_proba(frame)[0]
     classes = list(pipeline.named_steps["model"].classes_)
     score_map = {cls: float(prob) for cls, prob in zip(classes, proba)}
     p112 = score_map.get(LABEL_112, 0.0)
@@ -111,6 +182,8 @@ def route_question(bundle: Dict[str, object], question: str) -> Dict[str, object
     routed_fs = default_fs if pred_label == LABEL_TIE else ("112" if pred_label == LABEL_112 else "224")
     return {
         "question": question,
+        "choices": choices,
+        "input_mode": input_mode,
         "p_route_112": p112,
         "p_route_224": p224,
         "pred_label": pred_label,
@@ -130,8 +203,8 @@ def save_predictions(path: Path, rows: List[Dict[str, object]]) -> None:
 def main() -> None:
     args = parse_args()
     bundle = joblib.load(args.router_bundle)
-    questions = load_questions(args.question, args.question_file)
-    rows = [route_question(bundle, question) for question in questions]
+    records = load_records(args.question, args.choices, args.question_file)
+    rows = [route_question(bundle, record["question"], record.get("choices", "")) for record in records]
     for row in rows:
         print(json.dumps(row, ensure_ascii=False))
     if args.save_predictions is not None:
