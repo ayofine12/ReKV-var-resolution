@@ -88,6 +88,30 @@ run_scores() {
     "${extra_args[@]}"
 }
 
+run_scores_parallel() {
+  local pid_112 pid_224
+
+  echo "==== LVBench score runs will start concurrently ===="
+  echo "==== fs112 -> GPU ${GPU_FS112}; fs224 -> GPU ${GPU_FS224} ===="
+
+  run_scores "${GPU_FS112}" 112 72 144 &
+  pid_112=$!
+
+  run_scores "${GPU_FS224}" 224 18 36 &
+  pid_224=$!
+
+  local status_112=0
+  local status_224=0
+
+  wait "${pid_112}" || status_112=$?
+  wait "${pid_224}" || status_224=$?
+
+  if (( status_112 != 0 || status_224 != 0 )); then
+    echo "LVBench score run failed: fs112_status=${status_112}, fs224_status=${status_224}" >&2
+    exit 1
+  fi
+}
+
 require_csv_column() {
   local csv_path="$1"
   local column="$2"
@@ -155,8 +179,7 @@ run_router() {
 validate_stage
 
 if [[ "${STAGE}" == "all" || "${STAGE}" == "scores" ]]; then
-  run_scores "${GPU_FS112}" 112 72 144
-  run_scores "${GPU_FS224}" 224 18 36
+  run_scores_parallel
 fi
 
 if [[ "${STAGE}" == "all" || "${STAGE}" == "router" || "${STAGE}" == "dry-run" ]]; then

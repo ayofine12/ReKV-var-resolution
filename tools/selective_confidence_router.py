@@ -71,6 +71,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--csv-224", nargs="+", required=True, help="One or more fs224 result CSVs.")
     parser.add_argument("--output", type=Path, required=True, help="Path to save per-example routing decisions.")
     parser.add_argument(
+        "--duplicate-key-policy",
+        choices=["error", "first", "last"],
+        default="error",
+        help="How to handle duplicate question keys within one side's CSVs.",
+    )
+    parser.add_argument(
         "--gate-column",
         default="prob_margin",
         help="Column in the fs224 CSV used to decide whether fs224 is low-confidence.",
@@ -93,6 +99,20 @@ def parse_args() -> argparse.Namespace:
         default=FEATURE_COLUMNS,
         help="Confidence feature columns shown to the meta-verifier.",
     )
+    parser.add_argument(
+        "--include-gate-context",
+        action="store_true",
+        default=True,
+        help="Include the fs224 low-confidence gate reason in the LLM verifier prompt.",
+    )
+    parser.add_argument("--no-include-gate-context", dest="include_gate_context", action="store_false")
+    parser.add_argument(
+        "--include-feature-deltas",
+        action="store_true",
+        default=True,
+        help="Include Candidate X minus Candidate Y confidence feature deltas in the LLM verifier prompt.",
+    )
+    parser.add_argument("--no-include-feature-deltas", dest="include_feature_deltas", action="store_false")
     parser.add_argument(
         "--verifier",
         choices=["llm", "confidence", "fs224", "fs112", "oracle"],
@@ -138,6 +158,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=2024, help="Seed for randomizing candidate order.")
     parser.add_argument("--start", type=int, default=0)
     parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument(
+        "--example-filter",
+        choices=["all", "low-confidence", "low-disagree", "low-disagree-decisive"],
+        default="all",
+        help=(
+            "Filter examples before applying --start/--limit. "
+            "Use low-disagree to run the verifier on fs224-low-confidence rows where fs112/fs224 disagree. "
+            "Use low-disagree-decisive for offline diagnostics where exactly one side is correct."
+        ),
+    )
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--flush-every", type=int, default=20)
     parser.add_argument("--dry-run", action="store_true", help="Print one verifier prompt and exit.")
@@ -185,7 +215,11 @@ def parse_float(raw: object, default: float = 0.0) -> float:
         return default
 
 
-def load_side(paths: Sequence[str], side_name: str) -> Dict[Tuple[str, str, str, str], Dict[str, str]]:
+def load_side(
+    paths: Sequence[str],
+    side_name: str,
+    duplicate_key_policy: str,
+) -> Dict[Tuple[str, str, str, str], Dict[str, str]]:
     merged: Dict[Tuple[str, str, str, str], Dict[str, str]] = {}
     for path_str in paths:
         path = Path(path_str)
@@ -196,16 +230,23 @@ def load_side(paths: Sequence[str], side_name: str) -> Dict[Tuple[str, str, str,
             for row in reader:
                 key = result_key(row)
                 if key in merged:
-                    raise ValueError(f"Duplicate key for {side_name}: {key} from {path}")
+                    if duplicate_key_policy == "error":
+                        raise ValueError(f"Duplicate key for {side_name}: {key} from {path}")
+                    if duplicate_key_policy == "first":
+                        continue
                 row = dict(row)
                 row["_source_path"] = str(path)
                 merged[key] = row
     return merged
 
 
-def build_examples(paths112: Sequence[str], paths224: Sequence[str]) -> List[SelectiveExample]:
-    rows112 = load_side(paths112, "112")
-    rows224 = load_side(paths224, "224")
+def build_examples(
+    paths112: Sequence[str],
+    paths224: Sequence[str],
+    duplicate_key_policy: str,
+) -> List[SelectiveExample]:
+    rows112 = load_side(paths112, "112", duplicate_key_policy)
+    rows224 = load_side(paths224, "224", duplicate_key_policy)
     common_keys = sorted(set(rows112) & set(rows224))
     if not common_keys:
         raise ValueError("No overlapping questions between the provided fs112 and fs224 CSVs.")
@@ -333,6 +374,96 @@ def feature_block(row: Dict[str, str], columns: Sequence[str]) -> str:
     return "\n".join(lines)
 
 
+def compare_symbol(mode: str) -> str:
+    return {
+        "lt": "<",
+        "le": "<=",
+        "gt": ">",
+        "ge": ">=",
+    }.get(mode, mode)
+
+
+def gate_context_block(
+    ex: SelectiveExample,
+    args: argparse.Namespace,
+    candidates: Sequence[Tuple[str, str, str, Dict[str, str]]],
+) -> str:
+    gate_value = parse_float(ex.row224.get(args.gate_column), default=float("nan"))
+    fs224_label = None
+    for visible_label, (_, fs, _, _) in zip(["X", "Y"], candidates):
+        if fs == "224":
+            fs224_label = visible_label
+            break
+    if fs224_label is None or gate_value != gate_value:
+        return "- gate context unavailable"
+    return (
+        f"- Candidate {fs224_label} was marked low-confidence by the initial gate because "
+        f"{args.gate_column}={gate_value:.6g} {compare_symbol(args.low_confidence_when)} "
+        f"{args.gate_threshold:.6g}."
+    )
+
+
+def feature_delta_block(
+    candidates: Sequence[Tuple[str, str, str, Dict[str, str]]],
+    columns: Sequence[str],
+) -> str:
+    if len(candidates) != 2:
+        return "- feature deltas unavailable"
+    row_x = candidates[0][3]
+    row_y = candidates[1][3]
+    lines = []
+    for column in columns:
+        value_x = parse_float(row_x.get(column), default=float("nan"))
+        value_y = parse_float(row_y.get(column), default=float("nan"))
+        if value_x == value_x and value_y == value_y:
+            lines.append(f"- {column}_delta: {value_x - value_y:.6g}")
+    if not lines:
+        return "- no numeric feature deltas available"
+    return "\n".join(lines)
+
+
+def confidence_interpretation(columns: Sequence[str]) -> str:
+    high_is_better = [
+        column
+        for column in columns
+        if column in {"top1_prob", "top2_prob", "prob_margin", "logit_margin"}
+    ]
+    low_is_better = [
+        column
+        for column in columns
+        if column in {"choice_entropy", "normalized_choice_entropy"}
+    ]
+    parts = []
+    if high_is_better:
+        parts.append(f"Higher {', '.join(high_is_better)} usually indicate stronger confidence.")
+    if low_is_better:
+        parts.append(f"Lower {', '.join(low_is_better)} usually indicate stronger confidence.")
+    if not parts:
+        return ""
+    return " ".join(parts) + "\n"
+
+
+def feature_delta_interpretation(columns: Sequence[str]) -> str:
+    positive_favors_x = [
+        column
+        for column in columns
+        if column in {"top1_prob", "top2_prob", "prob_margin", "logit_margin"}
+    ]
+    negative_favors_x = [
+        column
+        for column in columns
+        if column in {"choice_entropy", "normalized_choice_entropy"}
+    ]
+    parts = []
+    if positive_favors_x:
+        parts.append(f"positive deltas favor Candidate X for {', '.join(positive_favors_x)}")
+    if negative_favors_x:
+        parts.append(f"negative deltas favor Candidate X for {', '.join(negative_favors_x)}")
+    if not parts:
+        return ""
+    return "Interpretation note: " + "; ".join(parts) + "."
+
+
 def randomized_candidates(ex: SelectiveExample, seed: int) -> List[Tuple[str, str, str, Dict[str, str]]]:
     candidates = [
         ("fs224", "224", ex.pred224, ex.row224),
@@ -348,6 +479,12 @@ def build_verifier_messages(
     args: argparse.Namespace,
     candidates: Sequence[Tuple[str, str, str, Dict[str, str]]],
 ) -> List[Dict[str, str]]:
+    gate_instruction = ""
+    if getattr(args, "include_gate_context", True):
+        gate_instruction = (
+            "A low-confidence gate explains why you are being asked to verify; it is not proof that "
+            "the gated candidate is wrong.\n"
+        )
     system_prompt = (
         "You are a cheap meta-verifier for multiple-choice video QA.\n"
         "\n"
@@ -355,9 +492,17 @@ def build_verifier_messages(
         "and confidence features from two resolution runs. Choose which candidate is more likely "
         "to be correct. Do not prefer a candidate because of its order or because of its hidden "
         "resolution. Treat confidence margins as useful but imperfect evidence.\n"
+        "Do not answer the multiple-choice question directly, and do not use world knowledge or "
+        "semantic plausibility to invent a new answer. The question and options are provided only "
+        "to identify what each candidate answer means and to check answer-option consistency. "
+        "Your task is to compare Candidate X against Candidate Y using their existing answers and "
+        "confidence features.\n"
+        f"{confidence_interpretation(args.feature_columns)}"
+        f"{gate_instruction}"
         "\n"
-        "Return only JSON with keys choice, confidence, and reason. choice must be \"X\" or \"Y\". "
-        "confidence must be a number from 0 to 1. Keep reason short."
+        "Return only JSON with keys choice, confidence, and reason. choice must be the candidate "
+        "label \"X\" or \"Y\", never an option letter like A, B, C, or D. confidence must be a "
+        "number from 0 to 1. Keep reason short."
     )
 
     labels = ["X", "Y"]
@@ -375,7 +520,23 @@ def build_verifier_messages(
     ]
     if args.include_task and ex.task:
         parts.append(f"Task/question type:\n{ex.task}")
+    if getattr(args, "include_gate_context", True):
+        parts.append(f"Gate context:\n{gate_context_block(ex, args, candidates)}")
     parts.extend(candidate_lines)
+    if getattr(args, "include_feature_deltas", True):
+        delta_note = feature_delta_interpretation(args.feature_columns)
+        delta_block = f"{feature_delta_block(candidates, args.feature_columns)}"
+        if delta_note:
+            delta_block = f"{delta_block}\n{delta_note}"
+        parts.append(
+            "Candidate X minus Candidate Y confidence deltas:\n"
+            f"{delta_block}"
+        )
+    parts.append(
+        "Output reminder:\n"
+        "Return JSON only. The choice value must be Candidate \"X\" or Candidate \"Y\"; "
+        "do not return the multiple-choice option letter."
+    )
     user_prompt = "\n\n".join(parts)
     return [
         {"role": "system", "content": system_prompt},
@@ -679,6 +840,43 @@ def load_existing_rows(path: Path) -> Dict[str, Dict[str, object]]:
     return rows
 
 
+def example_is_low_confidence(ex: SelectiveExample, args: argparse.Namespace) -> bool:
+    gate_value = parse_float(ex.row224.get(args.gate_column), default=float("nan"))
+    return gate_value == gate_value and is_low_confidence(
+        gate_value,
+        args.gate_threshold,
+        args.low_confidence_when,
+    )
+
+
+def example_is_disagreement(ex: SelectiveExample) -> bool:
+    return not (ex.pred112 == ex.pred224 and bool(ex.pred112))
+
+
+def filter_examples(examples: Sequence[SelectiveExample], args: argparse.Namespace) -> List[SelectiveExample]:
+    if args.example_filter == "all":
+        return list(examples)
+    if args.example_filter == "low-confidence":
+        return [ex for ex in examples if example_is_low_confidence(ex, args)]
+    if args.example_filter == "low-disagree":
+        return [
+            ex
+            for ex in examples
+            if example_is_low_confidence(ex, args) and example_is_disagreement(ex)
+        ]
+    if args.example_filter == "low-disagree-decisive":
+        return [
+            ex
+            for ex in examples
+            if (
+                example_is_low_confidence(ex, args)
+                and example_is_disagreement(ex)
+                and gold_label(ex) != LABEL_TIE
+            )
+        ]
+    raise ValueError(f"Unsupported --example-filter: {args.example_filter}")
+
+
 def select_examples(examples: Sequence[SelectiveExample], start: int, limit: int | None) -> List[SelectiveExample]:
     if start < 0:
         raise ValueError("--start must be non-negative.")
@@ -844,9 +1042,10 @@ def main() -> None:
     if args.workers < 1:
         raise ValueError("--workers must be at least 1.")
 
-    examples = build_examples(args.csv_112, args.csv_224)
+    examples = build_examples(args.csv_112, args.csv_224, args.duplicate_key_policy)
     default_fs = choose_default_fs(examples, args.default_fs)
-    selected_examples = select_examples(examples, args.start, args.limit)
+    filtered_examples = filter_examples(examples, args)
+    selected_examples = select_examples(filtered_examples, args.start, args.limit)
     if not selected_examples:
         raise ValueError("No examples selected.")
 
@@ -856,7 +1055,10 @@ def main() -> None:
 
     existing = load_existing_rows(args.output) if args.resume else {}
     rows, remaining = rows_from_existing(selected_examples, existing)
-    print(f"[setup] joined_examples={len(examples)} selected={len(selected_examples)}")
+    print(
+        f"[setup] joined_examples={len(examples)} filter={args.example_filter} "
+        f"filtered={len(filtered_examples)} selected={len(selected_examples)}"
+    )
     print(f"[setup] reused={len(rows)} remaining={len(remaining)}")
     print(f"[setup] default_fs={default_fs} verifier={args.verifier}")
 

@@ -3,6 +3,9 @@ from logzero import logger
 
 from video_qa.base import BaseVQA, work
 
+if torch.cuda.is_available() and hasattr(torch.backends.cuda, "enable_cudnn_sdp"):
+    torch.backends.cuda.enable_cudnn_sdp(False)
+
 
 class ReKVOfflineVQA(BaseVQA):
     def video_open_qa(self, question, max_new_tokens=1024, retrieved_indices=None):

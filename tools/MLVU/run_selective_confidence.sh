@@ -7,12 +7,10 @@ export REKV_VIDEO_CACHE_DIR="${REKV_VIDEO_CACHE_DIR:-/mnt/ssd1/mwnoh/MLVU/cache}
 export PYTHONPATH="/root/mwnoh/ReKV-var-resolution:/root/mwnoh/ReKV-var-resolution/model:/root/mwnoh/ReKV-var-resolution/model/longva:${PYTHONPATH:-}"
 
 STAGE="${STAGE:-all}" # all, scores, router, dry-run
-SPLITS="${SPLITS:-front back}"
 PYTHON_BIN="${PYTHON_BIN:-/root/mwnoh/anaconda3/envs/rekv/bin/python}"
 ROUTER_PYTHON_BIN="${ROUTER_PYTHON_BIN:-/root/mwnoh/anaconda3/bin/python3}"
 PROGRAM="${PROGRAM:-/root/mwnoh/ReKV-var-resolution/video_qa/rekv_offline_vqa.py}"
-ANNO_PATH_FRONT="${ANNO_PATH_FRONT:-/mnt/ssd1/mwnoh/MLVU/MLVU/annotations/mlvu_front_rekv.json}"
-ANNO_PATH_BACK="${ANNO_PATH_BACK:-/mnt/ssd1/mwnoh/MLVU/MLVU/annotations/mlvu_back_rekv.json}"
+ANNO_PATH="${ANNO_PATH:-/mnt/ssd1/mwnoh/MLVU/MLVU/annotations/mlvu_all_rekv.json}"
 BASE_SAVE_DIR="${BASE_SAVE_DIR:-/mnt/ssd1/mwnoh/var-resolution-mlvu-confidence}"
 OUTPUT_DIR="${OUTPUT_DIR:-/root/mwnoh/ReKV-var-resolution/results}"
 
@@ -40,10 +38,8 @@ RESUME="${RESUME:-False}"
 INCLUDE_TASK="${INCLUDE_TASK:-True}"
 RESPONSE_FORMAT_JSON="${RESPONSE_FORMAT_JSON:-True}"
 
-CSV_112_FRONT="${CSV_112_FRONT:-${BASE_SAVE_DIR}/fs112_lb72_rs144_front/1_0.csv}"
-CSV_112_BACK="${CSV_112_BACK:-${BASE_SAVE_DIR}/fs112_lb72_rs144_back/1_0.csv}"
-CSV_224_FRONT="${CSV_224_FRONT:-${BASE_SAVE_DIR}/fs224_lb18_rs36_front/1_0.csv}"
-CSV_224_BACK="${CSV_224_BACK:-${BASE_SAVE_DIR}/fs224_lb18_rs36_back/1_0.csv}"
+CSV_112="${CSV_112:-${BASE_SAVE_DIR}/fs112_lb72_rs144/1_0.csv}"
+CSV_224="${CSV_224:-${BASE_SAVE_DIR}/fs224_lb18_rs36/1_0.csv}"
 ROUTER_OUTPUT="${ROUTER_OUTPUT:-${OUTPUT_DIR}/selective_confidence_mlvu_${VERIFIER}_${GATE_COLUMN}_${GATE_THRESHOLD}.csv}"
 
 flag_enabled() {
@@ -63,44 +59,31 @@ validate_stage() {
   esac
 }
 
-anno_for_split() {
-  case "$1" in
-    front) printf '%s\n' "${ANNO_PATH_FRONT}" ;;
-    back) printf '%s\n' "${ANNO_PATH_BACK}" ;;
-    *)
-      echo "Unsupported MLVU split '$1'. SPLITS should contain front/back." >&2
-      exit 1
-      ;;
-  esac
-}
-
 run_scores() {
-  local split="$1"
-  local cuda_devices="$2"
-  local frame_size="$3"
-  local local_block_count="$4"
-  local retrieve_size="$5"
-  local anno_path
-  local save_dir="${BASE_SAVE_DIR}/fs${frame_size}_lb${local_block_count}_rs${retrieve_size}_${split}"
+  local cuda_devices="$1"
+  local frame_size="$2"
+  local local_block_count="$3"
+  local retrieve_size="$4"
+  local save_dir="${BASE_SAVE_DIR}/fs${frame_size}_lb${local_block_count}_rs${retrieve_size}"
   local -a extra_args=()
 
-  anno_path="$(anno_for_split "${split}")"
-  if [[ ! -f "${anno_path}" ]]; then
-    echo "Missing annotation for split '${split}': ${anno_path}" >&2
-    echo "Set ANNO_PATH_FRONT/ANNO_PATH_BACK, or run STAGE=router with existing scored CSVs." >&2
+  if [[ ! -f "${ANNO_PATH}" ]]; then
+    echo "Missing annotation: ${ANNO_PATH}" >&2
+    echo "Set ANNO_PATH, or run STAGE=router with existing scored CSVs." >&2
     exit 1
   fi
   if [[ -n "${START_VIDEO_ID}" ]]; then
     extra_args+=(--start_video_id "${START_VIDEO_ID}")
   fi
 
-  echo "==== MLVU ${split} score run fs${frame_size}_lb${local_block_count}_rs${retrieve_size} cuda=${cuda_devices} ===="
+  echo "==== MLVU score run fs${frame_size}_lb${local_block_count}_rs${retrieve_size} cuda=${cuda_devices} ===="
+  echo "==== anno_path=${ANNO_PATH} ===="
   echo "==== save_dir=${save_dir} ===="
 
   CUDA_VISIBLE_DEVICES="${cuda_devices}" "${PYTHON_BIN}" "${PROGRAM}" \
     --sample_fps "${SAMPLE_FPS}" \
     --save_dir "${save_dir}" \
-    --anno_path "${anno_path}" \
+    --anno_path "${ANNO_PATH}" \
     --model "${VQA_MODEL}" \
     --frame_size "${frame_size}" \
     --local_block_count "${local_block_count}" \
@@ -109,6 +92,27 @@ run_scores() {
     --save_choice_scores "${SAVE_CHOICE_SCORES}" \
     --debug "${DEBUG}" \
     "${extra_args[@]}"
+}
+
+run_score_pair() {
+  local pid112
+  local pid224
+  local status112=0
+  local status224=0
+
+  echo "==== Launching MLVU score runs in parallel ===="
+  run_scores "${GPU_FS112}" 112 72 144 &
+  pid112=$!
+  run_scores "${GPU_FS224}" 224 18 36 &
+  pid224=$!
+
+  wait "${pid112}" || status112=$?
+  wait "${pid224}" || status224=$?
+
+  if [[ "${status112}" -ne 0 || "${status224}" -ne 0 ]]; then
+    echo "MLVU score run failed: fs112 status=${status112}, fs224 status=${status224}" >&2
+    exit 1
+  fi
 }
 
 require_csv_column() {
@@ -133,8 +137,8 @@ require_csv_column() {
 
 run_router() {
   local -a router_args=(
-    --csv-112 "${CSV_112_FRONT}" "${CSV_112_BACK}"
-    --csv-224 "${CSV_224_FRONT}" "${CSV_224_BACK}"
+    --csv-112 "${CSV_112}"
+    --csv-224 "${CSV_224}"
     --output "${ROUTER_OUTPUT}"
     --gate-column "${GATE_COLUMN}"
     --gate-threshold "${GATE_THRESHOLD}"
@@ -147,10 +151,8 @@ run_router() {
     --start "${START}"
   )
 
-  require_csv_column "${CSV_112_FRONT}" "${CONFIDENCE_COMPARE_COLUMN}"
-  require_csv_column "${CSV_112_BACK}" "${CONFIDENCE_COMPARE_COLUMN}"
-  require_csv_column "${CSV_224_FRONT}" "${GATE_COLUMN}"
-  require_csv_column "${CSV_224_BACK}" "${GATE_COLUMN}"
+  require_csv_column "${CSV_112}" "${CONFIDENCE_COMPARE_COLUMN}"
+  require_csv_column "${CSV_224}" "${GATE_COLUMN}"
 
   if [[ -n "${LIMIT}" ]]; then
     router_args+=(--limit "${LIMIT}")
@@ -180,10 +182,7 @@ run_router() {
 validate_stage
 
 if [[ "${STAGE}" == "all" || "${STAGE}" == "scores" ]]; then
-  for split in ${SPLITS}; do
-    run_scores "${split}" "${GPU_FS112}" 112 72 144
-    run_scores "${split}" "${GPU_FS224}" 224 18 36
-  done
+  run_score_pair
 fi
 
 if [[ "${STAGE}" == "all" || "${STAGE}" == "router" || "${STAGE}" == "dry-run" ]]; then
