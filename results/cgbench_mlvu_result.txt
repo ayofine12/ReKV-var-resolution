@@ -1,0 +1,84 @@
+CGBench / MLVU LLM Verifier Results
+==================================
+
+Summary
+-------
+
+The LLM verifier produced small but consistent full-set accuracy gains over the
+fs224-only baseline on both CGBench and MLVU.
+
+
+CGBench
+-------
+
+Result file:
+  results/cgbench_verify_gpt54mini_t040_decisive_balanced400_compact_features_no_direct_answer.csv
+
+Evaluation setting:
+  - Default baseline: fs224
+  - Gate: fs224.prob_margin < 0.40
+  - Verifier: LLM verifier
+  - LLM verifier applied to low-confidence disagreement cases
+  - Final full-set accuracy was stitched together using the verifier decisions
+
+Accuracy:
+  - fs112 only: 32.17%
+  - fs224 only: 34.38%
+  - LLM-routed: 35.04%
+
+Gain:
+  - vs fs224: +0.67 percentage points
+  - vs fs112: +2.88 percentage points
+
+Additional notes:
+  - Common evaluated examples: 12,128
+  - Correct predictions increased from 4,169 to 4,250 vs fs224
+  - Net improvement: +81 correct examples
+  - Paired 95% CI for gain vs fs224: +0.20 to +1.14 percentage points
+  - McNemar exact p-value: 0.0059
+
+
+MLVU
+----
+
+Result file:
+  results/selective_confidence_mlvu_llm_t040_compact_features.csv
+
+Evaluation setting:
+  - Default baseline: fs224
+  - Gate: fs224.prob_margin < 0.40
+  - Verifier: LLM verifier
+  - LLM verifier called only for low-confidence disagreement cases
+
+Accuracy:
+  - fs112 only: 62.83%
+  - fs224 only: 64.26%
+  - LLM-routed: 64.95%
+
+Gain:
+  - vs fs224: +0.69 percentage points
+  - vs fs112: +2.12 percentage points
+
+Additional notes:
+  - Evaluated examples: 2,174
+  - Low-confidence ratio: 35.97%
+  - Verifier call ratio: 14.54%
+  - Decisive verifier routing accuracy: 56.91%
+  - Selective oracle accuracy: 69.83%
+  - Full oracle accuracy: 71.48%
+  - Average relative cost: 1.3670
+  - Cost vs always running both fs112 and fs224: 66.68%
+
+
+Takeaway
+--------
+
+Across both benchmarks, the LLM verifier improves over the fs224-only baseline:
+
+  - CGBench: +0.67 percentage points
+  - MLVU:    +0.69 percentage points
+
+The gains are modest, but they are consistent across datasets. This supports the
+claim that confidence-gated disagreement verification can recover a small amount
+of accuracy over a strong fs224-only baseline without always running both
+resolutions.

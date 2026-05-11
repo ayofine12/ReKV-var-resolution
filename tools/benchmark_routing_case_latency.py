@@ -13,6 +13,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import torch
+import torch.nn.functional as F
 from decord import VideoReader, cpu
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -149,13 +150,33 @@ def timed_call(fn, device):
     return out, time.perf_counter() - start
 
 
-def load_video(video_path: Path, sample_fps: float):
+def resize_video_to_square(video: torch.Tensor, frame_size: int) -> torch.Tensor:
+    if frame_size <= 0:
+        return video
+    if video.shape[1] == frame_size and video.shape[2] == frame_size:
+        return video
+
+    resized = torch.empty(
+        (video.shape[0], frame_size, frame_size, video.shape[3]),
+        dtype=video.dtype,
+    )
+    batch_size = 128
+    for start in range(0, video.shape[0], batch_size):
+        end = min(start + batch_size, video.shape[0])
+        frames = video[start:end].permute(0, 3, 1, 2).float()
+        frames = F.interpolate(frames, size=(frame_size, frame_size), mode="bilinear", align_corners=False)
+        frames = frames.round().clamp(0, 255).to(video.dtype)
+        resized[start:end] = frames.permute(0, 2, 3, 1)
+    return resized
+
+
+def load_video(video_path: Path, sample_fps: float, frame_size: int):
     vr = VideoReader(str(video_path), ctx=cpu(0))
     fps = round(vr.get_avg_fps())
     frame_step = max(1, int(fps / sample_fps))
     frame_idx = [i for i in range(0, len(vr), frame_step)]
-    video = vr.get_batch(frame_idx).asnumpy()
-    return torch.from_numpy(video)
+    video = torch.from_numpy(vr.get_batch(frame_idx).asnumpy())
+    return resize_video_to_square(video, frame_size)
 
 
 def normalize_lvbench_sample(sample: dict) -> dict:
@@ -352,7 +373,7 @@ def measure_fs(args: argparse.Namespace, rows: list[dict], fs_name: str, video_i
         video_path = Path(video_path_str)
         print(f"[video] fs{fs_name} {video_path} rows={len(group)}", flush=True)
         model.clear_cache()
-        video_tensor = load_video(video_path, args.sample_fps)
+        video_tensor = load_video(video_path, args.sample_fps, frame_size)
         _, build_elapsed = timed_call(
             lambda: (model.encode_init_prompt(), model.encode_video(video_tensor)),
             device,
