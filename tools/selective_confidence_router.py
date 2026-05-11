@@ -35,6 +35,7 @@ from typing import Any, Dict, List, Sequence, Tuple
 LABEL_112 = "route_112"
 LABEL_224 = "route_224"
 LABEL_TIE = "tie"
+LLM_VERIFIERS = {"llm", "llm_override"}
 
 FEATURE_COLUMNS = [
     "top1_prob",
@@ -79,7 +80,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--gate-column",
         default="prob_margin",
-        help="Column in the fs224 CSV used to decide whether fs224 is low-confidence.",
+        help="Column in the default-fs CSV used to decide whether the default route is low-confidence.",
     )
     parser.add_argument(
         "--gate-threshold",
@@ -91,7 +92,7 @@ def parse_args() -> argparse.Namespace:
         "--low-confidence-when",
         choices=["lt", "le", "gt", "ge"],
         default="lt",
-        help="Comparison that marks fs224 as low-confidence. Use lt for margins, gt for entropy.",
+        help="Comparison that marks the default route as low-confidence. Use lt for margins, gt for entropy.",
     )
     parser.add_argument(
         "--feature-columns",
@@ -115,12 +116,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-include-feature-deltas", dest="include_feature_deltas", action="store_false")
     parser.add_argument(
         "--verifier",
-        choices=["llm", "confidence", "fs224", "fs112", "oracle"],
+        choices=["llm", "llm_override", "confidence", "fs224", "fs112", "oracle"],
         default="confidence",
         help=(
-            "How to resolve fs112/fs224 disagreement after the fs224 low-confidence gate. "
-            "llm calls a prompt-based meta-verifier; confidence compares calibrated-looking margins; "
-            "oracle is an upper bound."
+            "How to resolve fs112/fs224 disagreement after the default route's low-confidence gate. "
+            "llm calls a symmetric prompt-based meta-verifier; llm_override asks whether the "
+            "challenger side has enough evidence to override the default answer; confidence compares "
+            "calibrated-looking margins; oracle is an upper bound."
         ),
     )
     parser.add_argument(
@@ -139,7 +141,7 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Include task/question_type in the LLM verifier prompt.",
     )
-    parser.add_argument("--model", default=os.environ.get("LLM_ROUTER_MODEL"), help="Chat model for --verifier llm.")
+    parser.add_argument("--model", default=os.environ.get("LLM_ROUTER_MODEL"), help="Chat model for LLM verifier modes.")
     parser.add_argument("--base-url", default=os.environ.get("OPENAI_BASE_URL"))
     parser.add_argument("--api-key-env", default="OPENAI_API_KEY")
     parser.add_argument("--temperature", type=float, default=0.0)
@@ -155,6 +157,15 @@ def parse_args() -> argparse.Namespace:
         default=0.0,
         help="If LLM verifier confidence is lower than this value, fall back to --default-fs.",
     )
+    parser.add_argument(
+        "--min-fs112-verifier-confidence",
+        type=float,
+        default=0.0,
+        help=(
+            "If the LLM verifier chooses fs112 with confidence lower than this value, "
+            "fall back to --default-fs. Applies only to fs112 choices."
+        ),
+    )
     parser.add_argument("--seed", type=int, default=2024, help="Seed for randomizing candidate order.")
     parser.add_argument("--start", type=int, default=0)
     parser.add_argument("--limit", type=int, default=None)
@@ -164,7 +175,7 @@ def parse_args() -> argparse.Namespace:
         default="all",
         help=(
             "Filter examples before applying --start/--limit. "
-            "Use low-disagree to run the verifier on fs224-low-confidence rows where fs112/fs224 disagree. "
+            "Use low-disagree to run the verifier on default-low-confidence rows where fs112/fs224 disagree. "
             "Use low-disagree-decisive for offline diagnostics where exactly one side is correct."
         ),
     )
@@ -363,6 +374,36 @@ def acc_for_fs(ex: SelectiveExample, fs: str) -> float:
     return ex.acc112 if fs == "112" else ex.acc224
 
 
+def other_fs(fs: str) -> str:
+    if fs == "112":
+        return "224"
+    if fs == "224":
+        return "112"
+    raise ValueError(f"Unsupported fs: {fs}")
+
+
+def row_for_fs(ex: SelectiveExample, fs: str) -> Dict[str, str]:
+    return ex.row112 if fs == "112" else ex.row224
+
+
+def pred_for_fs(ex: SelectiveExample, fs: str) -> str:
+    return ex.pred112 if fs == "112" else ex.pred224
+
+
+def selective_oracle_fs_for_gate(ex: SelectiveExample, default_fs: str, low_conf: bool) -> str:
+    if not low_conf:
+        return default_fs
+    if ex.acc112 > ex.acc224:
+        return "112"
+    if ex.acc224 > ex.acc112:
+        return "224"
+    return default_fs
+
+
+def cost_for_fs(args: argparse.Namespace, fs: str) -> float:
+    return args.cost_fs112 if fs == "112" else args.cost_fs224
+
+
 def feature_block(row: Dict[str, str], columns: Sequence[str]) -> str:
     lines = []
     for column in columns:
@@ -387,17 +428,19 @@ def gate_context_block(
     ex: SelectiveExample,
     args: argparse.Namespace,
     candidates: Sequence[Tuple[str, str, str, Dict[str, str]]],
+    default_fs: str,
 ) -> str:
-    gate_value = parse_float(ex.row224.get(args.gate_column), default=float("nan"))
-    fs224_label = None
+    gate_value = parse_float(row_for_fs(ex, default_fs).get(args.gate_column), default=float("nan"))
+    default_label = None
     for visible_label, (_, fs, _, _) in zip(["X", "Y"], candidates):
-        if fs == "224":
-            fs224_label = visible_label
+        if fs == default_fs:
+            default_label = visible_label
             break
-    if fs224_label is None or gate_value != gate_value:
+    if default_label is None or gate_value != gate_value:
         return "- gate context unavailable"
     return (
-        f"- Candidate {fs224_label} was marked low-confidence by the initial gate because "
+        f"- Candidate {default_label} (fs{default_fs}, the default route) was marked "
+        f"low-confidence by the initial gate because "
         f"{args.gate_column}={gate_value:.6g} {compare_symbol(args.low_confidence_when)} "
         f"{args.gate_threshold:.6g}."
     )
@@ -464,6 +507,27 @@ def feature_delta_interpretation(columns: Sequence[str]) -> str:
     return "Interpretation note: " + "; ".join(parts) + "."
 
 
+def fs_feature_delta_interpretation(columns: Sequence[str], favored_fs: str) -> str:
+    positive_favors_fs = [
+        column
+        for column in columns
+        if column in {"top1_prob", "top2_prob", "prob_margin", "logit_margin"}
+    ]
+    negative_favors_fs = [
+        column
+        for column in columns
+        if column in {"choice_entropy", "normalized_choice_entropy"}
+    ]
+    parts = []
+    if positive_favors_fs:
+        parts.append(f"positive deltas favor fs{favored_fs} for {', '.join(positive_favors_fs)}")
+    if negative_favors_fs:
+        parts.append(f"negative deltas favor fs{favored_fs} for {', '.join(negative_favors_fs)}")
+    if not parts:
+        return ""
+    return "Interpretation note: " + "; ".join(parts) + "."
+
+
 def randomized_candidates(ex: SelectiveExample, seed: int) -> List[Tuple[str, str, str, Dict[str, str]]]:
     candidates = [
         ("fs224", "224", ex.pred224, ex.row224),
@@ -478,6 +542,7 @@ def build_verifier_messages(
     ex: SelectiveExample,
     args: argparse.Namespace,
     candidates: Sequence[Tuple[str, str, str, Dict[str, str]]],
+    default_fs: str,
 ) -> List[Dict[str, str]]:
     gate_instruction = ""
     if getattr(args, "include_gate_context", True):
@@ -521,7 +586,7 @@ def build_verifier_messages(
     if args.include_task and ex.task:
         parts.append(f"Task/question type:\n{ex.task}")
     if getattr(args, "include_gate_context", True):
-        parts.append(f"Gate context:\n{gate_context_block(ex, args, candidates)}")
+        parts.append(f"Gate context:\n{gate_context_block(ex, args, candidates, default_fs)}")
     parts.extend(candidate_lines)
     if getattr(args, "include_feature_deltas", True):
         delta_note = feature_delta_interpretation(args.feature_columns)
@@ -544,11 +609,100 @@ def build_verifier_messages(
     ]
 
 
+def build_override_verifier_messages(
+    ex: SelectiveExample,
+    args: argparse.Namespace,
+    default_fs: str,
+) -> List[Dict[str, str]]:
+    challenger_fs = other_fs(default_fs)
+    default_row = row_for_fs(ex, default_fs)
+    challenger_row = row_for_fs(ex, challenger_fs)
+    default_pred = pred_for_fs(ex, default_fs)
+    challenger_pred = pred_for_fs(ex, challenger_fs)
+    gate_instruction = ""
+    if getattr(args, "include_gate_context", True):
+        gate_instruction = (
+            "A low-confidence gate explains why you are being asked to verify; it is not proof that "
+            f"the default fs{default_fs} answer is wrong.\n"
+        )
+    system_prompt = (
+        "You are a cheap override verifier for multiple-choice video QA.\n"
+        "\n"
+        f"You do not see video frames. You only see the question, options, the default fs{default_fs} answer, "
+        f"the challenger fs{challenger_fs} answer, and confidence features from both resolution runs. The fs{default_fs} "
+        "answer is the default route, but it has already been marked low-confidence by the gate. "
+        f"Decide whether the fs{challenger_fs} challenger has meaningfully stronger evidence than the default "
+        f"fs{default_fs} answer.\n"
+        f"Override to fs{challenger_fs} when its confidence evidence is meaningfully stronger or more consistent "
+        f"than fs{default_fs}'s. Keep fs{default_fs} when the evidence is balanced, unclear, favors fs{default_fs}, or the fs{challenger_fs} "
+        "advantage is tiny.\n"
+        "Do not answer the multiple-choice question directly, and do not use world knowledge or "
+        "semantic plausibility to invent a new answer. The question and options are provided only "
+        "to identify what each answer means and to check answer-option consistency. Treat confidence "
+        "margins as useful but imperfect evidence.\n"
+        f"{confidence_interpretation(args.feature_columns)}"
+        f"{gate_instruction}"
+        "\n"
+        "Return only JSON with keys override, confidence, and reason. override must be a boolean: "
+        f"true means use fs{challenger_fs}; false means keep fs{default_fs}. confidence must be a "
+        "number from 0 to 1 for your override/keep decision. Keep reason short."
+    )
+
+    parts = [
+        f"Question:\n{ex.question}",
+        f"Options:\n{format_choices(ex.choices)}",
+    ]
+    if args.include_task and ex.task:
+        parts.append(f"Task/question type:\n{ex.task}")
+    if getattr(args, "include_gate_context", True):
+        gate_value = parse_float(default_row.get(args.gate_column), default=float("nan"))
+        if gate_value == gate_value:
+            parts.append(
+                "Gate context:\n"
+                f"- Default fs{default_fs} was marked low-confidence because "
+                f"{args.gate_column}={gate_value:.6g} {compare_symbol(args.low_confidence_when)} "
+                f"{args.gate_threshold:.6g}."
+            )
+        else:
+            parts.append("Gate context:\n- gate context unavailable")
+    parts.extend(
+        [
+            f"Default fs{default_fs} answer\n"
+            f"answer: {answer_with_text(default_pred, ex.choices)}\n"
+            f"confidence features:\n{feature_block(default_row, args.feature_columns)}",
+            f"Challenger fs{challenger_fs} answer\n"
+            f"answer: {answer_with_text(challenger_pred, ex.choices)}\n"
+            f"confidence features:\n{feature_block(challenger_row, args.feature_columns)}",
+        ]
+    )
+    if getattr(args, "include_feature_deltas", True):
+        candidates = [
+            (f"fs{challenger_fs}", challenger_fs, challenger_pred, challenger_row),
+            (f"fs{default_fs}", default_fs, default_pred, default_row),
+        ]
+        delta_note = fs_feature_delta_interpretation(args.feature_columns, challenger_fs)
+        delta_block = f"{feature_delta_block(candidates, args.feature_columns)}"
+        if delta_note:
+            delta_block = f"{delta_block}\n{delta_note}"
+        parts.append(f"fs{challenger_fs} minus fs{default_fs} confidence deltas:\n" f"{delta_block}")
+    parts.append(
+        "Output reminder:\n"
+        f"Return JSON only. override=true means use fs{challenger_fs}. "
+        f"override=false means keep fs{default_fs}. "
+        "Do not return the multiple-choice option letter."
+    )
+    user_prompt = "\n\n".join(parts)
+    return [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+
+
 def load_openai_client(api_key_env: str, base_url: str | None, timeout: float):
     try:
         from openai import OpenAI
     except ImportError as exc:
-        raise RuntimeError("The openai package is required for --verifier llm.") from exc
+        raise RuntimeError("The openai package is required for LLM verifier modes.") from exc
 
     api_key = os.environ.get(api_key_env)
     if not api_key:
@@ -630,6 +784,71 @@ def parse_verifier_json(content: str) -> Tuple[str, float, str, str | None]:
     return choice, confidence, str(data.get("reason", "")), None
 
 
+def parse_override_verifier_json(
+    content: str,
+    default_fs: str,
+    challenger_fs: str,
+) -> Tuple[bool | None, float, str, str | None]:
+    text = strip_code_fence(content)
+    if not text.startswith("{"):
+        start = text.find("{")
+        end = text.rfind("}")
+        if start >= 0 and end > start:
+            text = text[start : end + 1]
+    try:
+        data = json.loads(text)
+    except Exception as exc:
+        return None, 0.0, "", f"json_parse_error: {exc}"
+
+    raw_override = data.get("override")
+    if raw_override is None:
+        raw_override = data.get("use_fs112")
+    if raw_override is None:
+        raw_override = data.get("choice")
+
+    override: bool | None
+    if isinstance(raw_override, bool):
+        override = raw_override
+    else:
+        value = str(raw_override).strip().lower()
+        true_values = {
+            "true",
+            "yes",
+            "y",
+            "1",
+            "override",
+            "use_challenger",
+            f"use_fs{challenger_fs}",
+            f"fs{challenger_fs}",
+            challenger_fs,
+        }
+        false_values = {
+            "false",
+            "no",
+            "n",
+            "0",
+            "keep",
+            "keep_default",
+            f"keep_fs{default_fs}",
+            f"use_fs{default_fs}",
+            f"fs{default_fs}",
+            default_fs,
+        }
+        if value in true_values:
+            override = True
+        elif value in false_values:
+            override = False
+        else:
+            return None, 0.0, str(data.get("reason", "")), f"bad_override: {raw_override}"
+
+    try:
+        confidence = float(data.get("confidence", 0.5))
+    except Exception:
+        confidence = 0.5
+    confidence = max(0.0, min(1.0, confidence))
+    return override, confidence, str(data.get("reason", "")), None
+
+
 def choose_by_confidence(ex: SelectiveExample, column: str, default_fs: str) -> Tuple[str, float, str]:
     score112 = parse_float(ex.row112.get(column), default=0.0)
     score224 = parse_float(ex.row224.get(column), default=0.0)
@@ -655,15 +874,26 @@ def route_one(
     default_fs: str,
     client: Any | None,
 ) -> Dict[str, object]:
-    gate_value = parse_float(ex.row224.get(args.gate_column), default=float("nan"))
+    challenger_fs = other_fs(default_fs)
+    default_row = row_for_fs(ex, default_fs)
+    challenger_row = row_for_fs(ex, challenger_fs)
+    default_pred = pred_for_fs(ex, default_fs)
+    challenger_pred = pred_for_fs(ex, challenger_fs)
+    gate_value = parse_float(default_row.get(args.gate_column), default=float("nan"))
     if gate_value != gate_value:
         raise ValueError(
-            f"Missing or non-numeric fs224 gate column {args.gate_column!r}. "
-            "Run fs224 with --save_choice_scores True first."
+            f"Missing or non-numeric fs{default_fs} gate column {args.gate_column!r}. "
+            f"Run fs{default_fs} with --save_choice_scores True first."
         )
     low_conf = is_low_confidence(gate_value, args.gate_threshold, args.low_confidence_when)
     gold = gold_label(ex)
-    selective_oracle_fs = "224" if not low_conf else ("112" if ex.acc112 > ex.acc224 else "224")
+    selective_oracle_fs = selective_oracle_fs_for_gate(ex, default_fs, low_conf)
+    agreement = default_pred == challenger_pred and bool(default_pred)
+    fs224_gate_value = parse_float(ex.row224.get(args.gate_column), default=float("nan"))
+    fs224_low_confidence = (
+        fs224_gate_value == fs224_gate_value
+        and is_low_confidence(fs224_gate_value, args.gate_threshold, args.low_confidence_when)
+    )
 
     base_row: Dict[str, object] = {
         "example_index": ex.index,
@@ -681,13 +911,21 @@ def route_one(
         "gate_column": args.gate_column,
         "gate_threshold": args.gate_threshold,
         "low_confidence_when": args.low_confidence_when,
-        "fs224_gate_value": gate_value,
-        "fs224_low_confidence": low_conf,
+        "gate_fs": default_fs,
+        "challenger_fs": challenger_fs,
+        "default_gate_value": gate_value,
+        "default_low_confidence": low_conf,
+        "default_challenger_agree": agreement,
+        "fs224_gate_value": fs224_gate_value,
+        "fs224_low_confidence": fs224_low_confidence,
         "fs112_fs224_agree": ex.pred112 == ex.pred224 and bool(ex.pred112),
         "verifier": args.verifier,
         "verifier_choice": "",
         "verifier_confidence": "",
         "verifier_reason": "",
+        "min_fs112_verifier_confidence": args.min_fs112_verifier_confidence,
+        "fs112_confidence_fallback": False,
+        "fs112_confidence_fallback_reason": "",
         "parse_error": "",
         "raw_response": "",
         "selective_oracle_fs": selective_oracle_fs,
@@ -698,12 +936,12 @@ def route_one(
     }
 
     if not low_conf:
-        routed_fs = "224"
-        pred_label = LABEL_224
-        decision = "accept_fs224_high_confidence"
-    elif ex.pred112 == ex.pred224 and ex.pred112:
-        routed_fs = "224"
-        pred_label = LABEL_224
+        routed_fs = default_fs
+        pred_label = fs_to_label(routed_fs)
+        decision = f"accept_fs{default_fs}_high_confidence"
+    elif agreement:
+        routed_fs = default_fs
+        pred_label = fs_to_label(routed_fs)
         decision = "low_confidence_agree_accept_answer"
     elif args.verifier == "fs224":
         routed_fs = "224"
@@ -728,7 +966,7 @@ def route_one(
         if client is None:
             raise RuntimeError("--verifier llm requires an OpenAI-compatible client.")
         candidates = randomized_candidates(ex, args.seed)
-        messages = build_verifier_messages(ex, args, candidates)
+        messages = build_verifier_messages(ex, args, candidates, default_fs)
         raw_response, request_error = request_llm(
             client=client,
             model=args.model,
@@ -747,19 +985,93 @@ def route_one(
             parse_error = request_error
         else:
             choice, verifier_confidence, reason, parse_error = parse_verifier_json(raw_response)
+        llm_chosen_fs = ""
         if choice in {"X", "Y"}:
             chosen_idx = 0 if choice == "X" else 1
             _, routed_fs, _, _ = candidates[chosen_idx]
+            llm_chosen_fs = routed_fs
             pred_label = fs_to_label(routed_fs)
         else:
             routed_fs = default_fs
-            pred_label = LABEL_TIE
+            pred_label = fs_to_label(routed_fs)
+        if (
+            llm_chosen_fs == "112"
+            and verifier_confidence < args.min_fs112_verifier_confidence
+        ):
+            routed_fs = default_fs
+            pred_label = fs_to_label(routed_fs)
+            base_row["fs112_confidence_fallback"] = True
+            base_row["fs112_confidence_fallback_reason"] = (
+                "fs112 verifier_confidence_below_fs112_threshold: "
+                f"{verifier_confidence:.3f} < {args.min_fs112_verifier_confidence:.3f}; "
+                f"fallback fs{default_fs}"
+            )
         if verifier_confidence < args.min_verifier_confidence:
             routed_fs = default_fs
-            pred_label = LABEL_TIE
+            pred_label = fs_to_label(routed_fs)
             parse_error = parse_error or f"verifier_confidence_below_threshold: {verifier_confidence:.3f}"
         decision = "llm_verifier_disagreement"
         base_row["verifier_choice"] = choice
+        base_row["verifier_confidence"] = verifier_confidence
+        base_row["verifier_reason"] = reason
+        base_row["parse_error"] = parse_error or ""
+    elif args.verifier == "llm_override":
+        if client is None:
+            raise RuntimeError("--verifier llm_override requires an OpenAI-compatible client.")
+        messages = build_override_verifier_messages(ex, args, default_fs)
+        raw_response, request_error = request_llm(
+            client=client,
+            model=args.model,
+            messages=messages,
+            temperature=args.temperature,
+            max_tokens=args.max_tokens,
+            response_format_json=args.response_format_json,
+            max_retries=args.max_retries,
+            retry_sleep=args.retry_sleep,
+        )
+        base_row["raw_response"] = raw_response
+        if request_error is not None:
+            override = None
+            verifier_confidence = 0.0
+            reason = ""
+            parse_error = request_error
+        else:
+            override, verifier_confidence, reason, parse_error = parse_override_verifier_json(
+                raw_response,
+                default_fs,
+                challenger_fs,
+            )
+        if override is True:
+            routed_fs = challenger_fs
+            pred_label = fs_to_label(routed_fs)
+            verifier_choice = f"override_fs{challenger_fs}"
+        elif override is False:
+            routed_fs = default_fs
+            pred_label = fs_to_label(routed_fs)
+            verifier_choice = f"keep_fs{default_fs}"
+        else:
+            routed_fs = default_fs
+            pred_label = fs_to_label(routed_fs)
+            verifier_choice = ""
+        if (
+            override is True
+            and challenger_fs == "112"
+            and verifier_confidence < args.min_fs112_verifier_confidence
+        ):
+            routed_fs = default_fs
+            pred_label = fs_to_label(routed_fs)
+            base_row["fs112_confidence_fallback"] = True
+            base_row["fs112_confidence_fallback_reason"] = (
+                "fs112 override_confidence_below_fs112_threshold: "
+                f"{verifier_confidence:.3f} < {args.min_fs112_verifier_confidence:.3f}; "
+                f"fallback fs{default_fs}"
+            )
+        if verifier_confidence < args.min_verifier_confidence:
+            routed_fs = default_fs
+            pred_label = fs_to_label(routed_fs)
+            parse_error = parse_error or f"verifier_confidence_below_threshold: {verifier_confidence:.3f}"
+        decision = "llm_override_disagreement"
+        base_row["verifier_choice"] = verifier_choice
         base_row["verifier_confidence"] = verifier_confidence
         base_row["verifier_reason"] = reason
         base_row["parse_error"] = parse_error or ""
@@ -796,6 +1108,11 @@ def output_fieldnames() -> List[str]:
         "gate_column",
         "gate_threshold",
         "low_confidence_when",
+        "gate_fs",
+        "challenger_fs",
+        "default_gate_value",
+        "default_low_confidence",
+        "default_challenger_agree",
         "fs224_gate_value",
         "fs224_low_confidence",
         "fs112_fs224_agree",
@@ -805,6 +1122,9 @@ def output_fieldnames() -> List[str]:
         "verifier_choice",
         "verifier_confidence",
         "verifier_reason",
+        "min_fs112_verifier_confidence",
+        "fs112_confidence_fallback",
+        "fs112_confidence_fallback_reason",
         "parse_error",
         "default_fs",
         "routed_fs",
@@ -840,8 +1160,8 @@ def load_existing_rows(path: Path) -> Dict[str, Dict[str, object]]:
     return rows
 
 
-def example_is_low_confidence(ex: SelectiveExample, args: argparse.Namespace) -> bool:
-    gate_value = parse_float(ex.row224.get(args.gate_column), default=float("nan"))
+def example_is_low_confidence(ex: SelectiveExample, args: argparse.Namespace, default_fs: str) -> bool:
+    gate_value = parse_float(row_for_fs(ex, default_fs).get(args.gate_column), default=float("nan"))
     return gate_value == gate_value and is_low_confidence(
         gate_value,
         args.gate_threshold,
@@ -853,23 +1173,27 @@ def example_is_disagreement(ex: SelectiveExample) -> bool:
     return not (ex.pred112 == ex.pred224 and bool(ex.pred112))
 
 
-def filter_examples(examples: Sequence[SelectiveExample], args: argparse.Namespace) -> List[SelectiveExample]:
+def filter_examples(
+    examples: Sequence[SelectiveExample],
+    args: argparse.Namespace,
+    default_fs: str,
+) -> List[SelectiveExample]:
     if args.example_filter == "all":
         return list(examples)
     if args.example_filter == "low-confidence":
-        return [ex for ex in examples if example_is_low_confidence(ex, args)]
+        return [ex for ex in examples if example_is_low_confidence(ex, args, default_fs)]
     if args.example_filter == "low-disagree":
         return [
             ex
             for ex in examples
-            if example_is_low_confidence(ex, args) and example_is_disagreement(ex)
+            if example_is_low_confidence(ex, args, default_fs) and example_is_disagreement(ex)
         ]
     if args.example_filter == "low-disagree-decisive":
         return [
             ex
             for ex in examples
             if (
-                example_is_low_confidence(ex, args)
+                example_is_low_confidence(ex, args, default_fs)
                 and example_is_disagreement(ex)
                 and gold_label(ex) != LABEL_TIE
             )
@@ -921,13 +1245,20 @@ def summarize(rows: Sequence[Dict[str, object]], args: argparse.Namespace, defau
     base224 = sum(acc224) / len(rows)
     default_acc = base112 if default_fs == "112" else base224
     routed_acc = sum(routed) / len(rows)
-    low_conf_rows = [row for row in rows if str(row["fs224_low_confidence"]) == "True"]
+    low_conf_rows = [
+        row
+        for row in rows
+        if str(row.get("default_low_confidence", row.get("fs224_low_confidence", ""))) == "True"
+    ]
     verifier_rows = [
         row
         for row in low_conf_rows
-        if str(row.get("fs112_fs224_agree", "")) != "True"
+        if str(row.get("default_challenger_agree", row.get("fs112_fs224_agree", ""))) != "True"
     ]
     parse_errors = sum(1 for row in rows if str(row.get("parse_error", "")))
+    fs112_confidence_fallbacks = sum(
+        1 for row in rows if str(row.get("fs112_confidence_fallback", "")) == "True"
+    )
 
     decisive_verifier = [row for row in verifier_rows if row["gold_label"] != LABEL_TIE]
     verifier_label_acc = (
@@ -937,8 +1268,8 @@ def summarize(rows: Sequence[Dict[str, object]], args: argparse.Namespace, defau
     )
 
     avg_cost = (
-        args.cost_fs224
-        + (len(low_conf_rows) / len(rows)) * args.cost_fs112
+        cost_for_fs(args, default_fs)
+        + (len(low_conf_rows) / len(rows)) * cost_for_fs(args, other_fs(default_fs))
         + (len(verifier_rows) / len(rows)) * args.cost_verifier
     )
     always_both_cost = args.cost_fs224 + args.cost_fs112 + args.cost_verifier
@@ -946,7 +1277,7 @@ def summarize(rows: Sequence[Dict[str, object]], args: argparse.Namespace, defau
     print("[summary]")
     print(f"n_examples: {len(rows)}")
     print(f"default_fs: {default_fs}")
-    print(f"gate: fs224.{args.gate_column} {args.low_confidence_when} {args.gate_threshold}")
+    print(f"gate: fs{default_fs}.{args.gate_column} {args.low_confidence_when} {args.gate_threshold}")
     print(f"verifier: {args.verifier}")
     print(f"base_acc_112: {100 * base112:.2f}")
     print(f"base_acc_224: {100 * base224:.2f}")
@@ -959,6 +1290,8 @@ def summarize(rows: Sequence[Dict[str, object]], args: argparse.Namespace, defau
     print(f"full_oracle_acc: {100 * (sum(full_oracle) / len(rows)):.2f}")
     print(f"low_confidence_ratio: {100 * (len(low_conf_rows) / len(rows)):.2f}")
     print(f"verifier_call_ratio: {100 * (len(verifier_rows) / len(rows)):.2f}")
+    print(f"min_fs112_verifier_confidence: {args.min_fs112_verifier_confidence:.3f}")
+    print(f"fs112_confidence_fallback_count: {fs112_confidence_fallbacks}")
     print(f"verifier_decisive_n: {len(decisive_verifier)}")
     print(f"verifier_decisive_label_acc: {100 * verifier_label_acc:.2f}")
     print(f"parse_error_count: {parse_errors}")
@@ -973,15 +1306,18 @@ def summarize(rows: Sequence[Dict[str, object]], args: argparse.Namespace, defau
 def print_dry_run(examples: Sequence[SelectiveExample], args: argparse.Namespace, default_fs: str) -> None:
     selected = None
     for ex in examples:
-        gate_value = parse_float(ex.row224.get(args.gate_column), default=float("nan"))
+        gate_value = parse_float(row_for_fs(ex, default_fs).get(args.gate_column), default=float("nan"))
         if gate_value == gate_value and is_low_confidence(gate_value, args.gate_threshold, args.low_confidence_when):
             if ex.pred112 != ex.pred224:
                 selected = ex
                 break
     if selected is None:
         selected = examples[0]
-    candidates = randomized_candidates(selected, args.seed)
-    messages = build_verifier_messages(selected, args, candidates)
+    if args.verifier == "llm_override":
+        messages = build_override_verifier_messages(selected, args, default_fs)
+    else:
+        candidates = randomized_candidates(selected, args.seed)
+        messages = build_verifier_messages(selected, args, candidates, default_fs)
     print("[dry_run_messages]")
     print(json.dumps(messages, ensure_ascii=False, indent=2))
     print(f"[dry_run] selected_examples={len(examples)} default_fs={default_fs}")
@@ -998,7 +1334,7 @@ def route_remaining(
         return rows
 
     completed_since_flush = 0
-    if args.workers <= 1 or args.verifier != "llm":
+    if args.workers <= 1 or args.verifier not in LLM_VERIFIERS:
         for position, ex in enumerate(remaining, start=1):
             row = route_one(ex, args, default_fs, client)
             rows.append(row)
@@ -1037,14 +1373,14 @@ def route_remaining(
 
 def main() -> None:
     args = parse_args()
-    if args.verifier == "llm" and not args.model and not args.dry_run:
-        raise ValueError("Provide --model or set LLM_ROUTER_MODEL for --verifier llm.")
+    if args.verifier in LLM_VERIFIERS and not args.model and not args.dry_run:
+        raise ValueError(f"Provide --model or set LLM_ROUTER_MODEL for --verifier {args.verifier}.")
     if args.workers < 1:
         raise ValueError("--workers must be at least 1.")
 
     examples = build_examples(args.csv_112, args.csv_224, args.duplicate_key_policy)
     default_fs = choose_default_fs(examples, args.default_fs)
-    filtered_examples = filter_examples(examples, args)
+    filtered_examples = filter_examples(examples, args, default_fs)
     selected_examples = select_examples(filtered_examples, args.start, args.limit)
     if not selected_examples:
         raise ValueError("No examples selected.")
@@ -1063,7 +1399,7 @@ def main() -> None:
     print(f"[setup] default_fs={default_fs} verifier={args.verifier}")
 
     client = None
-    if args.verifier == "llm":
+    if args.verifier in LLM_VERIFIERS:
         client = load_openai_client(args.api_key_env, args.base_url, args.timeout)
 
     rows = route_remaining(remaining, args, default_fs, client, rows)

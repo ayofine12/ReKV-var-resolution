@@ -1,0 +1,13 @@
+Confidence-Only vs LLM Verifier
+
+| Dataset | Default FS | Threshold | Best Baseline Acc | Confidence-only Acc | LLM Verifier Acc | Delta (LLM - Confidence) | Delta (LLM - Best Baseline) | Better |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| CGBench | fs224 | 0.15 | 34.38 | 34.88 | 35.11 | +0.23p | +0.73p | LLM verifier |
+| MLVU | fs224 | 0.50 | 64.26 | 64.77 | 65.00 | +0.23p | +0.74p | LLM verifier |
+| LVBench | fs224 | 0.30 | 38.84 | 40.46 | 40.32 | -0.14p | +1.49p | Confidence-only |
+
+Notes:
+- CGBench confidence-only is reported at threshold 0.15 to match the LLM verifier setting.
+- MLVU and LVBench are compared at the same threshold for confidence-only and LLM verifier.
+- Best Baseline Acc is max(fs112 baseline accuracy, fs224 baseline accuracy).
+- Accuracy values are percentages.
