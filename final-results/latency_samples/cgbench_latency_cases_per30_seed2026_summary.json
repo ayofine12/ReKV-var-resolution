@@ -1,0 +1,22 @@
+{
+  "routed_csv": "/root/mwnoh/ReKV-var-resolution/results/selective_confidence_cgbench_llm_t015_no_gate_context_three_features.csv",
+  "output_csv": "/root/mwnoh/ReKV-var-resolution/final-results/latency_samples/cgbench_latency_cases_per30_seed2026.csv",
+  "total": 12128,
+  "per_case_requested": 30,
+  "seed": 2026,
+  "case_counts": {
+    "case1_high_confidence": 7571,
+    "case2_low_confidence_agree": 2365,
+    "case3_low_confidence_disagree": 2192
+  },
+  "case_ratios": {
+    "case1_high_confidence": 0.6242579155672823,
+    "case2_low_confidence_agree": 0.1950032981530343,
+    "case3_low_confidence_disagree": 0.18073878627968337
+  },
+  "sample_counts": {
+    "case1_high_confidence": 30,
+    "case2_low_confidence_agree": 30,
+    "case3_low_confidence_disagree": 30
+  }
+}

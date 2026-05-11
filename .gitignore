@@ -1,39 +1,5 @@
-# Python
-__pycache__
-*.pyc
-*.egg-info
-
-# Log
-*.log
-*.log.*
-*.json
-*.jsonl
-
-# Editor
-.idea
-*.swp
-
-.ipynb_checkpoints
-*.ipynb
-*.sh
-*.err
-*.png
-*.csv
-log*
-
-# Other
-.DS_Store
-.vscode
-data/*
-!data/.gitkeep
-model_zoo/*
-!model_zoo/.gitkeep
-results/*
-!results/.gitkeep
-!tools/*
-!tools/LVBench/*
-!tools/MLVU/*
-
-# Keep generated and helper files under tools trackable when explicitly added.
-!tools/
-!tools/**
+# Intentionally no repository-level ignore rules.
+#
+# With this file empty of patterns, files under this repository are eligible
+# for `git add` unless they are ignored by .git/info/exclude or a global
+# core.excludesFile setting.
