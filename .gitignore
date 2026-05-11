@@ -33,3 +33,7 @@ results/*
 !tools/*
 !tools/LVBench/*
 !tools/MLVU/*
+
+# Keep generated and helper files under tools trackable when explicitly added.
+!tools/
+!tools/**
