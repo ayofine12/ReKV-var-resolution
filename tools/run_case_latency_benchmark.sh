@@ -21,11 +21,14 @@ export FS112_FRAME_SIZE="${FS112_FRAME_SIZE:-112}"
 export FS112_LOCAL_BLOCK_COUNT="${FS112_LOCAL_BLOCK_COUNT:-72}"
 export FS112_RETRIEVE_SIZE="${FS112_RETRIEVE_SIZE:-144}"
 export RETRIEVE_CHUNK_SIZE="${RETRIEVE_CHUNK_SIZE:-1}"
+export FS224_RETRIEVE_CHUNK_SIZE="${FS224_RETRIEVE_CHUNK_SIZE:-${RETRIEVE_CHUNK_SIZE}}"
+export FS112_RETRIEVE_CHUNK_SIZE="${FS112_RETRIEVE_CHUNK_SIZE:-${RETRIEVE_CHUNK_SIZE}}"
 export SAMPLE_FPS="${SAMPLE_FPS:-1}"
 export REPEATS="${REPEATS:-3}"
 export WARMUP="${WARMUP:-1}"
 export SKIP_MISSING_VIDEOS="${SKIP_MISSING_VIDEOS:-0}"
 export WARM_RETRIEVAL_CACHE="${WARM_RETRIEVAL_CACHE:-0}"
+export MEASURE_FS112_FOR_ALL="${MEASURE_FS112_FOR_ALL:-0}"
 export MEASURE_VERIFIER="${MEASURE_VERIFIER:-0}"
 export VERIFIER_MODEL="${VERIFIER_MODEL:-${LLM_ROUTER_MODEL:-}}"
 export VERIFIER_RESPONSE_FORMAT_JSON="${VERIFIER_RESPONSE_FORMAT_JSON:-1}"
@@ -86,6 +89,9 @@ run_one() {
   if truthy "${WARM_RETRIEVAL_CACHE}"; then
     extra_args+=(--warm-retrieval-cache)
   fi
+  if truthy "${MEASURE_FS112_FOR_ALL}"; then
+    extra_args+=(--measure-fs112-for-all)
+  fi
   if truthy "${MEASURE_VERIFIER}"; then
     if [[ -z "${VERIFIER_MODEL}" ]]; then
       echo "MEASURE_VERIFIER=1 requires VERIFIER_MODEL or LLM_ROUTER_MODEL." >&2
@@ -118,6 +124,8 @@ run_one() {
     --fs112-local-block-count "${FS112_LOCAL_BLOCK_COUNT}" \
     --fs112-retrieve-size "${FS112_RETRIEVE_SIZE}" \
     --retrieve-chunk-size "${RETRIEVE_CHUNK_SIZE}" \
+    --fs224-retrieve-chunk-size "${FS224_RETRIEVE_CHUNK_SIZE}" \
+    --fs112-retrieve-chunk-size "${FS112_RETRIEVE_CHUNK_SIZE}" \
     --sample-fps "${SAMPLE_FPS}" \
     --repeats "${REPEATS}" \
     --warmup "${WARMUP}" \

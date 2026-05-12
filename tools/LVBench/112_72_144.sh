@@ -12,6 +12,7 @@ PROGRAM="/root/mwnoh/ReKV-var-resolution/video_qa/rekv_offline_vqa.py"
 ANNO_PATH="/mnt/ssd1/mwnoh/LVBench/data/video_info.json"
 BASE_SAVE_DIR="/mnt/ssd1/mwnoh/var-resolution-screen"
 START_VIDEO_ID="${START_VIDEO_ID:-}"
+RETRIEVE_CHUNK_SIZE="${RETRIEVE_CHUNK_SIZE:-4}"
 
 # Exact budget-matched config:
 # fs112 -> 16 tokens/frame
@@ -23,13 +24,13 @@ declare -a CONFIGS=(
 
 for config in "${CONFIGS[@]}"; do
   read -r frame_size local_block_count retrieve_size <<<"${config}"
-  save_dir="${BASE_SAVE_DIR}/fs${frame_size}_lb${local_block_count}_rs${retrieve_size}"
+  save_dir="${BASE_SAVE_DIR}/fs${frame_size}_lb${local_block_count}_rs${retrieve_size}_rc${RETRIEVE_CHUNK_SIZE}"
   extra_args=()
   if [[ -n "${START_VIDEO_ID}" ]]; then
     extra_args+=(--start_video_id "${START_VIDEO_ID}")
   fi
 
-  echo "==== Running frame_size=${frame_size}, local_block_count=${local_block_count}, retrieve_size=${retrieve_size} on CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES} ===="
+  echo "==== Running frame_size=${frame_size}, local_block_count=${local_block_count}, retrieve_size=${retrieve_size}, retrieve_chunk_size=${RETRIEVE_CHUNK_SIZE} on CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES} ===="
   if [[ -n "${START_VIDEO_ID}" ]]; then
     echo "==== Restarting from video_id=${START_VIDEO_ID} ===="
   fi
@@ -42,7 +43,7 @@ for config in "${CONFIGS[@]}"; do
     --frame_size "${frame_size}" \
     --local_block_count "${local_block_count}" \
     --retrieve_size "${retrieve_size}" \
-    --retrieve_chunk_size 1 \
+    --retrieve_chunk_size "${RETRIEVE_CHUNK_SIZE}" \
     --debug False \
     "${extra_args[@]}"
 done

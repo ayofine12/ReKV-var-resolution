@@ -192,8 +192,9 @@ class BlockTensorStorage:
         pin_memory: bool = False,
     ):
         init_cached_size = 16
+        assert len(block_shape) == 3, f"Expected (n_head_kv, block_size, head_dim), got {block_shape}"
         self.data = torch.empty(
-            (init_cached_size,) + block_shape,
+            (block_shape[0], init_cached_size) + block_shape[1:],
             dtype=element_dtype,
             device="cpu",
             pin_memory=pin_memory,
@@ -206,12 +207,12 @@ class BlockTensorStorage:
     def append_cache(self):
         new_cache_size = self.cache_size * 2
         new_data = torch.empty(
-            (new_cache_size,) + self.block_shape,
+            (self.block_shape[0], new_cache_size) + self.block_shape[1:],
             dtype=self.data.dtype,
             device="cpu",
             pin_memory=self.data.is_pinned(),
         )
-        new_data[:self.cache_size].copy_(self.data)
+        new_data[:, :self.cache_size].copy_(self.data)
         self.data = new_data
         self.cache_size = new_cache_size
 
@@ -224,8 +225,8 @@ class BlockTensorStorage:
         while self.length + append_l > self.cache_size:
             self.append_cache()
 
-        target = self.data[self.length:self.length + append_l]
-        target.copy_(tensor, non_blocking=tensor.is_cuda)
+        target = self.data[:, self.length:self.length + append_l]
+        target.copy_(tensor.permute(1, 0, 2, 3), non_blocking=tensor.is_cuda)
         if tensor.is_cuda:
             event = torch.cuda.Event()
             event.record(torch.cuda.current_stream())
@@ -240,7 +241,57 @@ class BlockTensorStorage:
             indices = torch.as_tensor(indices, dtype=torch.long, device="cpu")
         else:
             indices = indices.to(device="cpu", dtype=torch.long)
-        return self.data[:self.length].index_select(0, indices)
+        selected = self.data[:, :self.length].index_select(1, indices)
+        return selected.permute(1, 0, 2, 3).contiguous()
+
+    @staticmethod
+    def _contiguous_runs(indices):
+        if len(indices) == 0:
+            return []
+
+        runs = []
+        src_start = src_prev = int(indices[0])
+        dst_start = 0
+        for idx in indices[1:]:
+            idx = int(idx)
+            if idx == src_prev + 1:
+                src_prev = idx
+                continue
+
+            runs.append((src_start, src_prev + 1, dst_start))
+            dst_start += src_prev - src_start + 1
+            src_start = src_prev = idx
+
+        runs.append((src_start, src_prev + 1, dst_start))
+        return runs
+
+    def copy_indices_to(self, indices, target: torch.Tensor, non_blocking: bool = False):
+        """Copy selected blocks to a head-major GPU target without CPU gather materialization.
+
+        target: (n_head_kv, len(indices) * block_size, head_dim)
+        """
+        if self.event is not None:
+            self.event.synchronize()
+        if isinstance(indices, torch.Tensor):
+            indices = indices.cpu().tolist()
+        if len(indices) == 0:
+            return 0
+
+        block_size = self.block_shape[1]
+        head_dim = self.block_shape[2]
+        expected_shape = (self.block_shape[0], len(indices) * block_size, head_dim)
+        assert tuple(target.shape) == expected_shape, f"{tuple(target.shape)}, {expected_shape}"
+
+        copied_runs = 0
+        for src_start, src_end, dst_block_start in self._contiguous_runs(indices):
+            assert 0 <= src_start < src_end <= self.length, f"{src_start}, {src_end}, {self.length}"
+            n_blocks = src_end - src_start
+            dst_st = dst_block_start * block_size
+            dst_ed = dst_st + n_blocks * block_size
+            source = self.data[:, src_start:src_end].reshape(self.block_shape[0], n_blocks * block_size, head_dim)
+            target[:, dst_st:dst_ed].copy_(source, non_blocking=non_blocking)
+            copied_runs += 1
+        return copied_runs
 
     def __len__(self):
         return self.length
@@ -483,16 +534,19 @@ class ContextManager:
                             continue
                         assert indices[-1] < self.num_global_block, f'{indices[-1]}, {self.num_global_block}'
 
-                        selected_k = self.offloaded_block_k[u].get_by_indices(indices)
-                        selected_v = self.offloaded_block_v[u].get_by_indices(indices)
-
-                        selected_k = selected_k.permute(1, 0, 2, 3).contiguous().view(self.unit_size_kv, -1, self.dim_head)
-                        selected_v = selected_v.permute(1, 0, 2, 3).contiguous().view(self.unit_size_kv, -1, self.dim_head)
-
                         st = init_ed
-                        ed = st + selected_k.size(1)
-                        global_h_k[u, :, st:ed, :].copy_(selected_k, non_blocking=self.pin_memory)
-                        global_h_v[u, :, st:ed, :].copy_(selected_v, non_blocking=self.pin_memory)
+                        unit_ed = st + len(indices) * self.block_size
+                        self.offloaded_block_k[u].copy_indices_to(
+                            indices,
+                            global_h_k[u, :, st:unit_ed, :],
+                            non_blocking=self.pin_memory,
+                        )
+                        self.offloaded_block_v[u].copy_indices_to(
+                            indices,
+                            global_h_v[u, :, st:unit_ed, :],
+                            non_blocking=self.pin_memory,
+                        )
+                        ed = max(ed, unit_ed)
                 else:
                     # offload LRU blocks
                     for u in range(self.num_units):

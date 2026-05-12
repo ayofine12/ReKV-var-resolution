@@ -74,6 +74,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fs112-local-block-count", type=int, default=72)
     parser.add_argument("--fs112-retrieve-size", type=int, default=144)
     parser.add_argument("--retrieve-chunk-size", type=int, default=1)
+    parser.add_argument("--fs224-retrieve-chunk-size", type=int, default=None)
+    parser.add_argument("--fs112-retrieve-chunk-size", type=int, default=None)
     parser.add_argument(
         "--measure-fs112-for-all",
         action="store_true",
@@ -333,21 +335,24 @@ def measure_fs(args: argparse.Namespace, rows: list[dict], fs_name: str, video_i
         frame_size = args.fs224_frame_size
         local_block_count = args.fs224_local_block_count
         retrieve_size = args.fs224_retrieve_size
+        retrieve_chunk_size = args.fs224_retrieve_chunk_size or args.retrieve_chunk_size
     else:
         frame_size = args.fs112_frame_size
         local_block_count = args.fs112_local_block_count
         retrieve_size = args.fs112_retrieve_size
+        retrieve_chunk_size = args.fs112_retrieve_chunk_size or args.retrieve_chunk_size
 
     print(
         f"[load_model] fs{fs_name} frame_size={frame_size} "
-        f"local_block_count={local_block_count} retrieve_size={retrieve_size}",
+        f"local_block_count={local_block_count} retrieve_size={retrieve_size} "
+        f"retrieve_chunk_size={retrieve_chunk_size}",
         flush=True,
     )
     model, _ = load_model(
         model_path=args.model_path,
         local_block_count=local_block_count,
         topk=retrieve_size,
-        chunk_size=args.retrieve_chunk_size,
+        chunk_size=retrieve_chunk_size,
         frame_size=frame_size,
     )
     device = next(model.parameters()).device
