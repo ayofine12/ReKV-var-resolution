@@ -1,0 +1,41 @@
+{
+  "input_sample_count": 15,
+  "measured_sample_count": 15,
+  "verifier_measured": false,
+  "case_summary": {
+    "case1_high_confidence": {
+      "full_ratio": 0.5466847091,
+      "sample_count": 5,
+      "fs224_mean_ms": 124.79672906666413,
+      "fs112_mean_ms": 0.0,
+      "verifier_mean_ms": 0.0,
+      "video_side_case_mean_ms": 124.79672906666413,
+      "routed_case_mean_ms": 124.79672906666413
+    },
+    "case2_low_confidence_agree": {
+      "full_ratio": 0.250338295,
+      "sample_count": 5,
+      "fs224_mean_ms": 128.99317146667877,
+      "fs112_mean_ms": 111.30207953333411,
+      "verifier_mean_ms": 0.0,
+      "video_side_case_mean_ms": 240.2952510000129,
+      "routed_case_mean_ms": 240.2952510000129
+    },
+    "case3_low_confidence_disagree": {
+      "full_ratio": 0.2029769959,
+      "sample_count": 5,
+      "fs224_mean_ms": 126.26487866668108,
+      "fs112_mean_ms": 337.99612799998613,
+      "verifier_mean_ms": 0.0,
+      "video_side_case_mean_ms": 464.26100666666724,
+      "routed_case_mean_ms": 464.26100666666724
+    }
+  },
+  "weighted_video_side_ms": 222.61387140509106,
+  "weighted_with_measured_verifier_ms": 222.61387140509106,
+  "weighted_routed_ms": 222.61387140509106,
+  "weighted_fs224_only_ms": 126.14525989749272,
+  "relative_video_side_cost_vs_fs224": 1.7647422628958866,
+  "relative_with_measured_verifier_cost_vs_fs224": 1.7647422628958866,
+  "relative_cost_vs_fs224": 1.7647422628958866
+}
