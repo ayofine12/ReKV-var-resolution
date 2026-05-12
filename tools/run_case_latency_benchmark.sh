@@ -13,6 +13,14 @@ export SEED="${SEED:-2026}"
 export SAMPLE_DIR="${SAMPLE_DIR:-/root/mwnoh/ReKV-var-resolution/final-results/latency_samples}"
 export OUTPUT_DIR="${OUTPUT_DIR:-/root/mwnoh/ReKV-var-resolution/final-results/latency_measurements}"
 
+export MODEL_PATH="${MODEL_PATH:-/mnt/models/qwen/Qwen2.5-VL-7B-Instruct}"
+export FS224_FRAME_SIZE="${FS224_FRAME_SIZE:-224}"
+export FS224_LOCAL_BLOCK_COUNT="${FS224_LOCAL_BLOCK_COUNT:-18}"
+export FS224_RETRIEVE_SIZE="${FS224_RETRIEVE_SIZE:-36}"
+export FS112_FRAME_SIZE="${FS112_FRAME_SIZE:-112}"
+export FS112_LOCAL_BLOCK_COUNT="${FS112_LOCAL_BLOCK_COUNT:-72}"
+export FS112_RETRIEVE_SIZE="${FS112_RETRIEVE_SIZE:-144}"
+export RETRIEVE_CHUNK_SIZE="${RETRIEVE_CHUNK_SIZE:-1}"
 export SAMPLE_FPS="${SAMPLE_FPS:-1}"
 export REPEATS="${REPEATS:-3}"
 export WARMUP="${WARMUP:-1}"
@@ -102,6 +110,14 @@ run_one() {
     --output-csv "${output_csv}" \
     --summary-json "${summary_json}" \
     --anno-path "${anno_path}" \
+    --model-path "${MODEL_PATH}" \
+    --fs224-frame-size "${FS224_FRAME_SIZE}" \
+    --fs224-local-block-count "${FS224_LOCAL_BLOCK_COUNT}" \
+    --fs224-retrieve-size "${FS224_RETRIEVE_SIZE}" \
+    --fs112-frame-size "${FS112_FRAME_SIZE}" \
+    --fs112-local-block-count "${FS112_LOCAL_BLOCK_COUNT}" \
+    --fs112-retrieve-size "${FS112_RETRIEVE_SIZE}" \
+    --retrieve-chunk-size "${RETRIEVE_CHUNK_SIZE}" \
     --sample-fps "${SAMPLE_FPS}" \
     --repeats "${REPEATS}" \
     --warmup "${WARMUP}" \

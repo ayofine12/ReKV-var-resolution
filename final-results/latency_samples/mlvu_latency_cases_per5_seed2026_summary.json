@@ -1,0 +1,22 @@
+{
+  "routed_csv": "/root/mwnoh/ReKV-var-resolution/results/selective_confidence_mlvu_llm_t050_no_gate_context_three_features.csv",
+  "output_csv": "/root/mwnoh/ReKV-var-resolution/final-results/latency_samples/mlvu_latency_cases_per5_seed2026.csv",
+  "total": 2174,
+  "per_case_requested": 5,
+  "seed": 2026,
+  "case_counts": {
+    "case1_high_confidence": 1274,
+    "case2_low_confidence_agree": 562,
+    "case3_low_confidence_disagree": 338
+  },
+  "case_ratios": {
+    "case1_high_confidence": 0.5860165593376265,
+    "case2_low_confidence_agree": 0.25850965961361544,
+    "case3_low_confidence_disagree": 0.15547378104875806
+  },
+  "sample_counts": {
+    "case1_high_confidence": 5,
+    "case2_low_confidence_agree": 5,
+    "case3_low_confidence_disagree": 5
+  }
+}
