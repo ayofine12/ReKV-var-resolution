@@ -40,9 +40,9 @@ RESUME="${RESUME:-False}"
 INCLUDE_TASK="${INCLUDE_TASK:-True}"
 RESPONSE_FORMAT_JSON="${RESPONSE_FORMAT_JSON:-True}"
 
-CSV_112="${CSV_112:-${BASE_SAVE_DIR}/fs112_lb72_rs144_rc${FS112_RETRIEVE_CHUNK_SIZE}/1_0.csv}"
-CSV_224="${CSV_224:-${BASE_SAVE_DIR}/fs224_lb18_rs36_rc${FS224_RETRIEVE_CHUNK_SIZE}/1_0.csv}"
-ROUTER_OUTPUT="${ROUTER_OUTPUT:-${OUTPUT_DIR}/selective_confidence_lvbench_fs112rc${FS112_RETRIEVE_CHUNK_SIZE}_fs224rc${FS224_RETRIEVE_CHUNK_SIZE}_${VERIFIER}_${GATE_COLUMN}_${GATE_THRESHOLD}.csv}"
+CSV_112="${CSV_112:-${BASE_SAVE_DIR}/fs112_lb72_rs144_rcs${FS112_RETRIEVE_CHUNK_SIZE}/1_0.csv}"
+CSV_224="${CSV_224:-${BASE_SAVE_DIR}/fs224_lb18_rs36_rcs${FS224_RETRIEVE_CHUNK_SIZE}/1_0.csv}"
+ROUTER_OUTPUT="${ROUTER_OUTPUT:-${OUTPUT_DIR}/selective_confidence_lvbench_fs112rcs${FS112_RETRIEVE_CHUNK_SIZE}_fs224rcs${FS224_RETRIEVE_CHUNK_SIZE}_${VERIFIER}_${GATE_COLUMN}_${GATE_THRESHOLD}.csv}"
 
 flag_enabled() {
   case "${1:-}" in
@@ -67,14 +67,14 @@ run_scores() {
   local local_block_count="$3"
   local retrieve_size="$4"
   local retrieve_chunk_size="$5"
-  local save_dir="${BASE_SAVE_DIR}/fs${frame_size}_lb${local_block_count}_rs${retrieve_size}_rc${retrieve_chunk_size}"
+  local save_dir="${BASE_SAVE_DIR}/fs${frame_size}_lb${local_block_count}_rs${retrieve_size}_rcs${retrieve_chunk_size}"
   local -a extra_args=()
 
   if [[ -n "${START_VIDEO_ID}" ]]; then
     extra_args+=(--start_video_id "${START_VIDEO_ID}")
   fi
 
-  echo "==== LVBench score run fs${frame_size}_lb${local_block_count}_rs${retrieve_size}_rc${retrieve_chunk_size} cuda=${cuda_devices} ===="
+  echo "==== LVBench score run fs${frame_size}_lb${local_block_count}_rs${retrieve_size}_rcs${retrieve_chunk_size} cuda=${cuda_devices} ===="
   echo "==== save_dir=${save_dir} ===="
 
   CUDA_VISIBLE_DEVICES="${cuda_devices}" "${PYTHON_BIN}" "${PROGRAM}" \

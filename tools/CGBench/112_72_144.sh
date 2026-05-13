@@ -24,7 +24,7 @@ declare -a CONFIGS=(
 
 for config in "${CONFIGS[@]}"; do
   read -r frame_size local_block_count retrieve_size <<<"${config}"
-  save_dir="${BASE_SAVE_DIR}/fs${frame_size}_lb${local_block_count}_rs${retrieve_size}_rc${RETRIEVE_CHUNK_SIZE}"
+  save_dir="${BASE_SAVE_DIR}/fs${frame_size}_lb${local_block_count}_rs${retrieve_size}_rcs${RETRIEVE_CHUNK_SIZE}"
   extra_args=()
   if [[ -n "${START_VIDEO_ID}" ]]; then
     extra_args+=(--start_video_id "${START_VIDEO_ID}")
