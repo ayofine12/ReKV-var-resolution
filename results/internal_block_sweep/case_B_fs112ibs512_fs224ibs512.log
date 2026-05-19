@@ -1,0 +1,64 @@
+case	tok/s	tokens	seq_ms	seq_vs_A	2gpu_est_ms	2gpu_vs_A	branches
+B	64.00	117984	22891.07		11494.11		fs112:fps=2.0=>2,frames=3686,rcs=4, fs224:fps=0.5=>0.5,frames=922,rcs=1
+
+--- STDERR ---
+
+Loading weights:   0%|          | 0/729 [00:00<?, ?it/s]
+Loading weights:   0%|          | 2/729 [00:00<01:29,  8.11it/s]
+Loading weights:   2%|▏         | 16/729 [00:00<00:12, 54.91it/s]
+Loading weights:   4%|▎         | 27/729 [00:00<00:10, 68.74it/s]
+Loading weights:   5%|▍         | 36/729 [00:00<00:09, 72.63it/s]
+Loading weights:   6%|▌         | 45/729 [00:00<00:09, 69.10it/s]
+Loading weights:   7%|▋         | 53/729 [00:00<00:09, 68.87it/s]
+Loading weights:   9%|▊         | 63/729 [00:01<00:10, 66.38it/s]
+Loading weights:  10%|█         | 76/729 [00:01<00:10, 63.78it/s]
+Loading weights:  12%|█▏        | 87/729 [00:01<00:09, 70.85it/s]
+Loading weights:  14%|█▎        | 100/729 [00:01<00:07, 80.82it/s]
+Loading weights:  15%|█▍        | 109/729 [00:01<00:07, 79.44it/s]
+Loading weights:  16%|█▌        | 118/729 [00:01<00:08, 72.68it/s]
+Loading weights:  17%|█▋        | 126/729 [00:01<00:09, 66.40it/s]
+Loading weights:  19%|█▉        | 137/729 [00:01<00:08, 74.00it/s]
+Loading weights:  20%|██        | 147/729 [00:02<00:08, 70.00it/s]
+Loading weights:  22%|██▏       | 160/729 [00:02<00:06, 81.30it/s]
+Loading weights:  23%|██▎       | 169/729 [00:02<00:07, 79.64it/s]
+Loading weights:  24%|██▍       | 178/729 [00:02<00:08, 64.12it/s]
+Loading weights:  26%|██▌       | 186/729 [00:02<00:08, 60.49it/s]
+Loading weights:  27%|██▋       | 197/729 [00:02<00:07, 68.41it/s]
+Loading weights:  29%|██▊       | 208/729 [00:02<00:06, 76.02it/s]
+Loading weights:  30%|██▉       | 217/729 [00:03<00:06, 76.31it/s]
+Loading weights:  31%|███       | 225/729 [00:03<00:08, 62.13it/s]
+Loading weights:  32%|███▏      | 233/729 [00:03<00:07, 63.63it/s]
+Loading weights:  33%|███▎      | 244/729 [00:03<00:07, 65.67it/s]
+Loading weights:  35%|███▌      | 256/729 [00:03<00:06, 75.91it/s]
+Loading weights:  36%|███▋      | 265/729 [00:03<00:06, 76.06it/s]
+Loading weights:  37%|███▋      | 273/729 [00:04<00:07, 62.24it/s]
+Loading weights:  39%|███▊      | 281/729 [00:04<00:07, 63.41it/s]
+Loading weights:  40%|████      | 292/729 [00:04<00:06, 72.42it/s]
+Loading weights:  41%|████      | 300/729 [00:04<00:05, 72.00it/s]
+Loading weights:  42%|████▏     | 308/729 [00:04<00:06, 66.83it/s]
+Loading weights:  43%|████▎     | 317/729 [00:04<00:06, 64.33it/s]
+Loading weights:  45%|████▍     | 328/729 [00:04<00:07, 57.02it/s]
+Loading weights:  54%|█████▎    | 391/729 [00:04<00:01, 173.72it/s]
+Loading weights:  63%|██████▎   | 457/729 [00:05<00:00, 281.94it/s]
+Loading weights:  72%|███████▏  | 525/729 [00:05<00:00, 377.47it/s]
+Loading weights:  81%|████████▏ | 593/729 [00:05<00:00, 451.85it/s]
+Loading weights:  91%|█████████ | 664/729 [00:05<00:00, 519.11it/s]
+Loading weights:  99%|█████████▉| 725/729 [00:05<00:00, 532.41it/s]
+Loading weights: 100%|██████████| 729/729 [00:05<00:00, 132.34it/s]
+[I 260519 06:48:33 qwen2_5_vl_rekv:275] n_init: 14
+[I 260519 06:48:33 qwen2_5_vl_rekv:275] n_local: 1152
+[I 260519 06:48:33 qwen2_5_vl_rekv:275] fattn: True
+[I 260519 06:48:33 qwen2_5_vl_rekv:275] block_size: 64
+[I 260519 06:48:33 qwen2_5_vl_rekv:275] topk: 36
+[I 260519 06:48:33 qwen2_5_vl_rekv:275] chunk_size: 1
+[I 260519 06:48:33 qwen2_5_vl_rekv:275] max_cached_block: 128
+[I 260519 06:48:33 qwen2_5_vl_rekv:275] exc_block_size: 64
+[I 260519 06:48:33 qwen2_5_vl_rekv:275] pin_memory: True
+[I 260519 06:48:33 qwen2_5_vl_rekv:276] frame_size: 224
+[I 260519 06:48:33 qwen2_5_vl_rekv:277] n_frame_tokens: 64
+[I 260519 06:48:33 qwen2_5_vl_rekv:278] local_block_count: 18
+[I 260519 06:48:33 qwen2_5_vl_rekv:279] internal_block_size: 64
+[case B] fs112@2.0 + fs224@0.5 temporal-heavy
+/root/mwnoh/ReKV-var-resolution/model/attention/dot_production_attention/triton_impl.py:458: UserWarning: Triton Attention Output Resources. out of resource: shared memory, Required: 122880, Hardware limit: 101376. Reducing block sizes or `num_stages` may help.
+Use smaller block size 32.
+  warn(f"Triton Attention Output Resources. {E}\nUse smaller block size {_BLOCK_N}.")

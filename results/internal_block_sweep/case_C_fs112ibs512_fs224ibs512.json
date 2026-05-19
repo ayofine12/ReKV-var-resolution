@@ -1,0 +1,112 @@
+{
+  "video_path": "/mnt/ssd1/mwnoh/LVBench/scripts/videos/_T2Avd3tFHc.mp4",
+  "retrieval_or_qa_executed": false,
+  "warmup": 0,
+  "repeats": 1,
+  "rekv_defer_offload_wait": "1",
+  "rekv_offload_granularity": "chunk",
+  "rekv_batched_offload_copy": "1",
+  "max_pending_chunks_per_branch": 1,
+  "results": [
+    {
+      "case": "C",
+      "description": "fs112@1.0 + fs224@0.75 balanced-highres",
+      "branch_order": [
+        "fs224",
+        "fs112"
+      ],
+      "branches": {
+        "fs112": {
+          "original_fps_rounded": 24,
+          "sampling_step": 24,
+          "requested_fps": 1.0,
+          "effective_fps": 1.0,
+          "sampled_frames": 1843,
+          "decode_wall_ms": 28730.149754788727,
+          "prepare_video_wall_ms": 30257.766840979457,
+          "resize_wall_ms": 1059.032364282757,
+          "n_frame_tokens": 16,
+          "total_video_tokens": 29488,
+          "effective_tokens_per_second": 16.0,
+          "n_local": 1152,
+          "local_tokens": 1152,
+          "frame_size": 112,
+          "local_block_count": 72,
+          "retrieve_size": 144,
+          "retrieve_chunk_size": 4,
+          "encode_chunk_size": 64,
+          "resolved_internal_block_size": 512
+        },
+        "fs224": {
+          "original_fps_rounded": 24,
+          "sampling_step": 32,
+          "requested_fps": 0.75,
+          "effective_fps": 0.75,
+          "sampled_frames": 1383,
+          "decode_wall_ms": 28581.894761882722,
+          "prepare_video_wall_ms": 30432.066172827035,
+          "resize_wall_ms": 1357.5885128229856,
+          "n_frame_tokens": 64,
+          "total_video_tokens": 88512,
+          "effective_tokens_per_second": 48.0,
+          "n_local": 1152,
+          "local_tokens": 1152,
+          "frame_size": 224,
+          "local_block_count": 18,
+          "retrieve_size": 36,
+          "retrieve_chunk_size": 1,
+          "encode_chunk_size": 16,
+          "resolved_internal_block_size": 512
+        }
+      },
+      "effective_tokens_per_second": 64.0,
+      "total_video_tokens": 118000,
+      "single_gpu_sequential": {
+        "count": 1,
+        "mean_ms": 22873.13660699874,
+        "median_ms": 22873.13660699874,
+        "min_ms": 22873.13660699874,
+        "max_ms": 22873.13660699874,
+        "std_ms": 0.0,
+        "values_ms": [
+          22873.13660699874
+        ]
+      },
+      "two_gpu_parallel_estimate": {
+        "count": 1,
+        "mean_ms": 17096.492847893387,
+        "median_ms": 17096.492847893387,
+        "min_ms": 17096.492847893387,
+        "max_ms": 17096.492847893387,
+        "std_ms": 0.0,
+        "values_ms": [
+          17096.492847893387
+        ]
+      },
+      "per_branch_sequential_segments": {
+        "fs224": {
+          "count": 1,
+          "mean_ms": 17096.492847893387,
+          "median_ms": 17096.492847893387,
+          "min_ms": 17096.492847893387,
+          "max_ms": 17096.492847893387,
+          "std_ms": 0.0,
+          "values_ms": [
+            17096.492847893387
+          ]
+        },
+        "fs112": {
+          "count": 1,
+          "mean_ms": 5776.482495013624,
+          "median_ms": 5776.482495013624,
+          "min_ms": 5776.482495013624,
+          "max_ms": 5776.482495013624,
+          "std_ms": 0.0,
+          "values_ms": [
+            5776.482495013624
+          ]
+        }
+      }
+    }
+  ]
+}

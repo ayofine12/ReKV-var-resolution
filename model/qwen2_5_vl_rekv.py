@@ -199,7 +199,8 @@ class Qwen2_5_VL_ReKV(Qwen2_5_VLForConditionalGeneration, Abstract_ReKV):
 
 
 def load_model(model_path='/mnt/models/qwen/Qwen2.5-VL-7B-Instruct',
-               n_init=None, n_local=None, local_block_count=None, topk=64, chunk_size=1, frame_size=224):
+               n_init=None, n_local=None, local_block_count=None, topk=64, chunk_size=1,
+               frame_size=224, internal_block_size=None):
     device = 'cuda'
     processor = AutoProcessor.from_pretrained(
         model_path,
@@ -220,6 +221,24 @@ def load_model(model_path='/mnt/models/qwen/Qwen2.5-VL-7B-Instruct',
     if resolved_n_local is None:
         raise ValueError("Either n_local or local_block_count must be provided.")
 
+    if internal_block_size is None or internal_block_size <= 0:
+        resolved_internal_block_size = n_frame_tokens
+    else:
+        if internal_block_size < n_frame_tokens:
+            raise ValueError(
+                f"internal_block_size={internal_block_size} must be >= n_frame_tokens={n_frame_tokens}."
+            )
+        if internal_block_size % n_frame_tokens != 0:
+            raise ValueError(
+                f"internal_block_size={internal_block_size} must be a multiple of "
+                f"n_frame_tokens={n_frame_tokens}."
+            )
+        if internal_block_size > resolved_n_local:
+            raise ValueError(
+                f"internal_block_size={internal_block_size} must be <= n_local={resolved_n_local}."
+            )
+        resolved_internal_block_size = internal_block_size
+
     max_cached_block = max(128, topk)
 
     init_prompt = '<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\n'
@@ -232,7 +251,7 @@ def load_model(model_path='/mnt/models/qwen/Qwen2.5-VL-7B-Instruct',
         'topk': topk,
         'chunk_size': chunk_size,
         'max_cached_block': max_cached_block,
-        'exc_block_size': n_frame_tokens,
+        'exc_block_size': resolved_internal_block_size,
         'pin_memory': True,
     }
     model = Qwen2_5_VL_ReKV.from_pretrained(
@@ -257,6 +276,7 @@ def load_model(model_path='/mnt/models/qwen/Qwen2.5-VL-7B-Instruct',
     logger.info(f'frame_size: {frame_size}')
     logger.info(f'n_frame_tokens: {n_frame_tokens}')
     logger.info(f'local_block_count: {local_block_count}')
+    logger.info(f'internal_block_size: {resolved_internal_block_size}')
 
     model.eval()
     return model, processor

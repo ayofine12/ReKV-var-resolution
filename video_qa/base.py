@@ -326,6 +326,7 @@ def work(QA_CLASS):
     parser.add_argument("--frame_size", type=int, default=224)
     parser.add_argument("--retrieve_size", type=int, default=64)
     parser.add_argument("--retrieve_chunk_size", type=int, default=1)
+    parser.add_argument("--internal_block_size", type=int, default=0)
     parser.add_argument("--start_video_id", type=str, default=None)
     parser.add_argument("--save_choice_scores", type=str2bool, nargs='?', const=True, default=False)
     parser.add_argument("--debug", type=str2bool, nargs='?', const=True, default=True)
@@ -355,6 +356,7 @@ def work(QA_CLASS):
     if args.model == "qwen2_5_vl_7b":
         load_kwargs["local_block_count"] = args.local_block_count
         load_kwargs["frame_size"] = args.frame_size
+        load_kwargs["internal_block_size"] = args.internal_block_size or None
     videoqa_model, videoqa_processor = load_func(**load_kwargs)
 
     # Load ground truth file

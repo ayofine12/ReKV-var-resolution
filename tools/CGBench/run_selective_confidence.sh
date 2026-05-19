@@ -24,7 +24,12 @@ FS112_SAMPLE_FPS="${FS112_SAMPLE_FPS:-${SAMPLE_FPS:-2}}"
 FS224_SAMPLE_FPS="${FS224_SAMPLE_FPS:-${SAMPLE_FPS:-0.5}}"
 FS112_FPS_TAG="fps${FS112_SAMPLE_FPS//./p}"
 FS224_FPS_TAG="fps${FS224_SAMPLE_FPS//./p}"
-RETRIEVE_CHUNK_SIZE="${RETRIEVE_CHUNK_SIZE:-1}"
+RETRIEVE_CHUNK_SIZE="${RETRIEVE_CHUNK_SIZE:-}"
+FS112_RETRIEVE_CHUNK_SIZE="${FS112_RETRIEVE_CHUNK_SIZE:-${RETRIEVE_CHUNK_SIZE:-4}}"
+FS224_RETRIEVE_CHUNK_SIZE="${FS224_RETRIEVE_CHUNK_SIZE:-${RETRIEVE_CHUNK_SIZE:-1}}"
+INTERNAL_BLOCK_SIZE="${INTERNAL_BLOCK_SIZE:-}"
+FS112_INTERNAL_BLOCK_SIZE="${FS112_INTERNAL_BLOCK_SIZE:-${INTERNAL_BLOCK_SIZE:-512}}"
+FS224_INTERNAL_BLOCK_SIZE="${FS224_INTERNAL_BLOCK_SIZE:-${INTERNAL_BLOCK_SIZE:-128}}"
 DEBUG="${DEBUG:-False}"
 SAVE_CHOICE_SCORES="${SAVE_CHOICE_SCORES:-True}"
 START_VIDEO_ID="${START_VIDEO_ID:-}"
@@ -67,13 +72,13 @@ esac
 
 ANNO_SRC="${ANNO_SRC:-${DEFAULT_ANNO_SRC}}"
 ANNO_PATH="${ANNO_PATH:-${DEFAULT_ANNO_PATH}}"
-CSV_112="${CSV_112:-${BASE_SAVE_DIR}/fs112_lb72_rs144_${FS112_FPS_TAG}/1_0.csv}"
-CSV_224="${CSV_224:-${BASE_SAVE_DIR}/fs224_lb18_rs36_${FS224_FPS_TAG}/1_0.csv}"
+CSV_112="${CSV_112:-${BASE_SAVE_DIR}/fs112_lb72_rs144_rcs${FS112_RETRIEVE_CHUNK_SIZE}_ibs${FS112_INTERNAL_BLOCK_SIZE}_${FS112_FPS_TAG}/1_0.csv}"
+CSV_224="${CSV_224:-${BASE_SAVE_DIR}/fs224_lb18_rs36_rcs${FS224_RETRIEVE_CHUNK_SIZE}_ibs${FS224_INTERNAL_BLOCK_SIZE}_${FS224_FPS_TAG}/1_0.csv}"
 OUTPUT_FILTER_SUFFIX=""
 if [[ "${EXAMPLE_FILTER}" != "all" ]]; then
   OUTPUT_FILTER_SUFFIX="_${EXAMPLE_FILTER}"
 fi
-ROUTER_OUTPUT="${ROUTER_OUTPUT:-${OUTPUT_DIR}/selective_confidence_cgbench_${SPLIT}_${FS112_FPS_TAG}_${FS224_FPS_TAG}${OUTPUT_FILTER_SUFFIX}_${VERIFIER}_${GATE_COLUMN}_${GATE_THRESHOLD}.csv}"
+ROUTER_OUTPUT="${ROUTER_OUTPUT:-${OUTPUT_DIR}/selective_confidence_cgbench_${SPLIT}_fs112rcs${FS112_RETRIEVE_CHUNK_SIZE}_ibs${FS112_INTERNAL_BLOCK_SIZE}_${FS112_FPS_TAG}_fs224rcs${FS224_RETRIEVE_CHUNK_SIZE}_ibs${FS224_INTERNAL_BLOCK_SIZE}_${FS224_FPS_TAG}${OUTPUT_FILTER_SUFFIX}_${VERIFIER}_${GATE_COLUMN}_${GATE_THRESHOLD}.csv}"
 
 flag_enabled() {
   case "${1:-}" in
@@ -127,16 +132,18 @@ run_scores() {
   local frame_size="$2"
   local local_block_count="$3"
   local retrieve_size="$4"
-  local sample_fps="$5"
+  local retrieve_chunk_size="$5"
+  local internal_block_size="$6"
+  local sample_fps="$7"
   local fps_tag="fps${sample_fps//./p}"
-  local save_dir="${BASE_SAVE_DIR}/fs${frame_size}_lb${local_block_count}_rs${retrieve_size}_${fps_tag}"
+  local save_dir="${BASE_SAVE_DIR}/fs${frame_size}_lb${local_block_count}_rs${retrieve_size}_rcs${retrieve_chunk_size}_ibs${internal_block_size}_${fps_tag}"
   local -a extra_args=()
 
   if [[ -n "${START_VIDEO_ID}" ]]; then
     extra_args+=(--start_video_id "${START_VIDEO_ID}")
   fi
 
-  echo "==== CGBench ${SPLIT} score run fs${frame_size}_lb${local_block_count}_rs${retrieve_size} sample_fps=${sample_fps} cuda=${cuda_devices} ===="
+  echo "==== CGBench ${SPLIT} score run fs${frame_size}_lb${local_block_count}_rs${retrieve_size}_rcs${retrieve_chunk_size}_ibs${internal_block_size} sample_fps=${sample_fps} cuda=${cuda_devices} ===="
   echo "==== anno_path=${ANNO_PATH} ===="
   echo "==== video_dir=${VIDEO_DIR} ===="
   echo "==== save_dir=${save_dir} ===="
@@ -149,7 +156,8 @@ run_scores() {
     --frame_size "${frame_size}" \
     --local_block_count "${local_block_count}" \
     --retrieve_size "${retrieve_size}" \
-    --retrieve_chunk_size "${RETRIEVE_CHUNK_SIZE}" \
+    --retrieve_chunk_size "${retrieve_chunk_size}" \
+    --internal_block_size "${internal_block_size}" \
     --save_choice_scores "${SAVE_CHOICE_SCORES}" \
     --debug "${DEBUG}" \
     "${extra_args[@]}"
@@ -165,9 +173,9 @@ run_score_pair() {
 
   echo "==== Launching CGBench ${SPLIT} score runs in parallel ===="
   echo "==== fs112 sample_fps=${FS112_SAMPLE_FPS}; fs224 sample_fps=${FS224_SAMPLE_FPS} ===="
-  run_scores "${GPU_FS112}" 112 72 144 "${FS112_SAMPLE_FPS}" &
+  run_scores "${GPU_FS112}" 112 72 144 "${FS112_RETRIEVE_CHUNK_SIZE}" "${FS112_INTERNAL_BLOCK_SIZE}" "${FS112_SAMPLE_FPS}" &
   pid112=$!
-  run_scores "${GPU_FS224}" 224 18 36 "${FS224_SAMPLE_FPS}" &
+  run_scores "${GPU_FS224}" 224 18 36 "${FS224_RETRIEVE_CHUNK_SIZE}" "${FS224_INTERNAL_BLOCK_SIZE}" "${FS224_SAMPLE_FPS}" &
   pid224=$!
 
   wait "${pid112}" || status112=$?

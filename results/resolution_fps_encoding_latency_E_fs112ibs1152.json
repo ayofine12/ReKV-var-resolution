@@ -1,0 +1,79 @@
+{
+  "video_path": "/mnt/ssd1/mwnoh/LVBench/scripts/videos/_T2Avd3tFHc.mp4",
+  "retrieval_or_qa_executed": false,
+  "warmup": 0,
+  "repeats": 1,
+  "rekv_defer_offload_wait": "1",
+  "rekv_offload_granularity": "chunk",
+  "rekv_batched_offload_copy": "1",
+  "max_pending_chunks_per_branch": 1,
+  "results": [
+    {
+      "case": "E",
+      "description": "fs112@4.0 only low-res dense",
+      "branch_order": [
+        "fs112"
+      ],
+      "branches": {
+        "fs112": {
+          "original_fps_rounded": 24,
+          "sampling_step": 6,
+          "requested_fps": 4.0,
+          "effective_fps": 4.0,
+          "sampled_frames": 7372,
+          "decode_wall_ms": 35442.80082732439,
+          "prepare_video_wall_ms": 39147.48112671077,
+          "resize_wall_ms": 3371.0643891245127,
+          "n_frame_tokens": 16,
+          "total_video_tokens": 117952,
+          "effective_tokens_per_second": 64.0,
+          "n_local": 1152,
+          "local_tokens": 1152,
+          "frame_size": 112,
+          "local_block_count": 72,
+          "retrieve_size": 144,
+          "retrieve_chunk_size": 4,
+          "encode_chunk_size": 64,
+          "resolved_internal_block_size": 1152
+        }
+      },
+      "effective_tokens_per_second": 64.0,
+      "total_video_tokens": 117952,
+      "single_gpu_sequential": {
+        "count": 1,
+        "mean_ms": 22847.15426666662,
+        "median_ms": 22847.15426666662,
+        "min_ms": 22847.15426666662,
+        "max_ms": 22847.15426666662,
+        "std_ms": 0.0,
+        "values_ms": [
+          22847.15426666662
+        ]
+      },
+      "two_gpu_parallel_estimate": {
+        "count": 1,
+        "mean_ms": 22846.99872508645,
+        "median_ms": 22846.99872508645,
+        "min_ms": 22846.99872508645,
+        "max_ms": 22846.99872508645,
+        "std_ms": 0.0,
+        "values_ms": [
+          22846.99872508645
+        ]
+      },
+      "per_branch_sequential_segments": {
+        "fs112": {
+          "count": 1,
+          "mean_ms": 22846.99872508645,
+          "median_ms": 22846.99872508645,
+          "min_ms": 22846.99872508645,
+          "max_ms": 22846.99872508645,
+          "std_ms": 0.0,
+          "values_ms": [
+            22846.99872508645
+          ]
+        }
+      }
+    }
+  ]
+}

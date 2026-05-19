@@ -1,0 +1,63 @@
+case	tok/s	tokens	seq_ms	seq_vs_A	2gpu_est_ms	2gpu_vs_A	branches
+E	64.00	117952	24080.60		24080.44		fs112:fps=4.0=>4,frames=7372,rcs=4
+
+--- STDERR ---
+
+Loading weights:   0%|          | 0/729 [00:00<?, ?it/s]
+Loading weights:   0%|          | 2/729 [00:00<01:29,  8.13it/s]
+Loading weights:   2%|▏         | 16/729 [00:00<00:12, 55.50it/s]
+Loading weights:   4%|▍         | 28/729 [00:00<00:11, 61.43it/s]
+Loading weights:   5%|▌         | 40/729 [00:00<00:09, 74.86it/s]
+Loading weights:   7%|▋         | 52/729 [00:00<00:09, 74.44it/s]
+Loading weights:   9%|▉         | 64/729 [00:00<00:08, 82.67it/s]
+Loading weights:  10%|█         | 73/729 [00:01<00:08, 81.19it/s]
+Loading weights:  11%|█         | 82/729 [00:01<00:08, 74.74it/s]
+Loading weights:  12%|█▏        | 90/729 [00:01<00:09, 68.80it/s]
+Loading weights:  14%|█▍        | 101/729 [00:01<00:09, 67.46it/s]
+Loading weights:  15%|█▌        | 112/729 [00:01<00:08, 74.60it/s]
+Loading weights:  17%|█▋        | 123/729 [00:01<00:07, 79.83it/s]
+Loading weights:  18%|█▊        | 132/729 [00:01<00:07, 80.24it/s]
+Loading weights:  19%|█▉        | 141/729 [00:01<00:07, 74.38it/s]
+Loading weights:  20%|██        | 149/729 [00:02<00:07, 73.33it/s]
+Loading weights:  22%|██▏       | 160/729 [00:02<00:07, 79.85it/s]
+Loading weights:  23%|██▎       | 169/729 [00:02<00:07, 78.81it/s]
+Loading weights:  24%|██▍       | 177/729 [00:02<00:08, 62.42it/s]
+Loading weights:  26%|██▌       | 186/729 [00:02<00:08, 62.15it/s]
+Loading weights:  27%|██▋       | 197/729 [00:02<00:07, 70.20it/s]
+Loading weights:  29%|██▊       | 208/729 [00:02<00:07, 69.41it/s]
+Loading weights:  30%|███       | 220/729 [00:03<00:06, 75.53it/s]
+Loading weights:  31%|███▏      | 228/729 [00:03<00:07, 66.37it/s]
+Loading weights:  32%|███▏      | 235/729 [00:03<00:08, 61.13it/s]
+Loading weights:  34%|███▎      | 245/729 [00:03<00:07, 61.71it/s]
+Loading weights:  35%|███▌      | 257/729 [00:03<00:06, 72.57it/s]
+Loading weights:  37%|███▋      | 268/729 [00:03<00:06, 66.18it/s]
+Loading weights:  38%|███▊      | 280/729 [00:03<00:06, 72.18it/s]
+Loading weights:  40%|███▉      | 288/729 [00:04<00:06, 71.80it/s]
+Loading weights:  41%|████      | 296/729 [00:04<00:06, 66.97it/s]
+Loading weights:  42%|████▏     | 305/729 [00:04<00:06, 63.64it/s]
+Loading weights:  43%|████▎     | 317/729 [00:04<00:06, 59.65it/s]
+Loading weights:  45%|████▌     | 329/729 [00:04<00:05, 69.42it/s]
+Loading weights:  49%|████▉     | 359/729 [00:04<00:03, 119.11it/s]
+Loading weights:  58%|█████▊    | 423/729 [00:04<00:01, 241.01it/s]
+Loading weights:  67%|██████▋   | 485/729 [00:05<00:00, 330.27it/s]
+Loading weights:  76%|███████▌  | 553/729 [00:05<00:00, 418.79it/s]
+Loading weights:  85%|████████▌ | 621/729 [00:05<00:00, 484.00it/s]
+Loading weights:  95%|█████████▍| 689/729 [00:05<00:00, 537.48it/s]
+Loading weights: 100%|██████████| 729/729 [00:05<00:00, 133.61it/s]
+[I 260519 06:37:58 qwen2_5_vl_rekv:275] n_init: 14
+[I 260519 06:37:58 qwen2_5_vl_rekv:275] n_local: 1152
+[I 260519 06:37:58 qwen2_5_vl_rekv:275] fattn: True
+[I 260519 06:37:58 qwen2_5_vl_rekv:275] block_size: 64
+[I 260519 06:37:58 qwen2_5_vl_rekv:275] topk: 36
+[I 260519 06:37:58 qwen2_5_vl_rekv:275] chunk_size: 1
+[I 260519 06:37:58 qwen2_5_vl_rekv:275] max_cached_block: 128
+[I 260519 06:37:58 qwen2_5_vl_rekv:275] exc_block_size: 64
+[I 260519 06:37:58 qwen2_5_vl_rekv:275] pin_memory: True
+[I 260519 06:37:58 qwen2_5_vl_rekv:276] frame_size: 224
+[I 260519 06:37:58 qwen2_5_vl_rekv:277] n_frame_tokens: 64
+[I 260519 06:37:58 qwen2_5_vl_rekv:278] local_block_count: 18
+[I 260519 06:37:58 qwen2_5_vl_rekv:279] internal_block_size: 64
+[case E] fs112@4.0 only low-res dense
+/root/mwnoh/ReKV-var-resolution/model/attention/dot_production_attention/triton_impl.py:458: UserWarning: Triton Attention Output Resources. out of resource: shared memory, Required: 122880, Hardware limit: 101376. Reducing block sizes or `num_stages` may help.
+Use smaller block size 32.
+  warn(f"Triton Attention Output Resources. {E}\nUse smaller block size {_BLOCK_N}.")

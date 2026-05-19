@@ -1,0 +1,65 @@
+case	tok/s	tokens	seq_ms	seq_vs_A	2gpu_est_ms	2gpu_vs_A	branches
+C	64.00	118000	22873.14		17096.49		fs112:fps=1.0=>1,frames=1843,rcs=4, fs224:fps=0.75=>0.75,frames=1383,rcs=1
+
+--- STDERR ---
+
+Loading weights:   0%|          | 0/729 [00:00<?, ?it/s]
+Loading weights:   0%|          | 1/729 [00:00<03:09,  3.84it/s]
+Loading weights:   2%|▏         | 16/729 [00:00<00:14, 49.44it/s]
+Loading weights:   4%|▍         | 29/729 [00:00<00:10, 68.94it/s]
+Loading weights:   5%|▌         | 40/729 [00:00<00:08, 77.57it/s]
+Loading weights:   7%|▋         | 49/729 [00:00<00:08, 76.67it/s]
+Loading weights:   8%|▊         | 58/729 [00:00<00:09, 69.41it/s]
+Loading weights:   9%|▉         | 66/729 [00:01<00:10, 63.78it/s]
+Loading weights:  11%|█         | 77/729 [00:01<00:08, 73.11it/s]
+Loading weights:  12%|█▏        | 88/729 [00:01<00:07, 80.17it/s]
+Loading weights:  13%|█▎        | 97/729 [00:01<00:07, 79.50it/s]
+Loading weights:  15%|█▍        | 106/729 [00:01<00:08, 70.98it/s]
+Loading weights:  16%|█▌        | 114/729 [00:01<00:09, 64.84it/s]
+Loading weights:  17%|█▋        | 125/729 [00:01<00:08, 73.90it/s]
+Loading weights:  19%|█▊        | 135/729 [00:01<00:08, 69.25it/s]
+Loading weights:  20%|██        | 148/729 [00:02<00:07, 81.24it/s]
+Loading weights:  22%|██▏       | 157/729 [00:02<00:07, 80.76it/s]
+Loading weights:  23%|██▎       | 166/729 [00:02<00:07, 73.46it/s]
+Loading weights:  24%|██▍       | 174/729 [00:02<00:09, 59.00it/s]
+Loading weights:  25%|██▌       | 185/729 [00:02<00:08, 66.98it/s]
+Loading weights:  27%|██▋       | 196/729 [00:02<00:07, 74.02it/s]
+Loading weights:  28%|██▊       | 204/729 [00:02<00:07, 72.78it/s]
+Loading weights:  29%|██▉       | 212/729 [00:03<00:07, 67.98it/s]
+Loading weights:  30%|███       | 220/729 [00:03<00:09, 55.01it/s]
+Loading weights:  32%|███▏      | 232/729 [00:03<00:07, 64.60it/s]
+Loading weights:  33%|███▎      | 244/729 [00:03<00:07, 68.41it/s]
+Loading weights:  35%|███▌      | 256/729 [00:03<00:06, 77.69it/s]
+Loading weights:  36%|███▋      | 265/729 [00:03<00:06, 77.03it/s]
+Loading weights:  38%|███▊      | 274/729 [00:04<00:07, 62.92it/s]
+Loading weights:  39%|███▊      | 281/729 [00:04<00:06, 64.02it/s]
+Loading weights:  40%|████      | 292/729 [00:04<00:05, 73.07it/s]
+Loading weights:  41%|████      | 300/729 [00:04<00:05, 72.26it/s]
+Loading weights:  42%|████▏     | 308/729 [00:04<00:06, 67.52it/s]
+Loading weights:  43%|████▎     | 316/729 [00:04<00:06, 62.14it/s]
+Loading weights:  45%|████▍     | 328/729 [00:04<00:05, 69.40it/s]
+Loading weights:  46%|████▌     | 336/729 [00:04<00:05, 70.06it/s]
+Loading weights:  56%|█████▌    | 405/729 [00:04<00:01, 223.19it/s]
+Loading weights:  64%|██████▍   | 469/729 [00:05<00:00, 331.50it/s]
+Loading weights:  73%|███████▎  | 535/729 [00:05<00:00, 420.12it/s]
+Loading weights:  82%|████████▏ | 601/729 [00:05<00:00, 485.23it/s]
+Loading weights:  92%|█████████▏| 669/729 [00:05<00:00, 538.73it/s]
+Loading weights: 100%|█████████▉| 726/729 [00:05<00:00, 531.93it/s]
+Loading weights: 100%|██████████| 729/729 [00:05<00:00, 132.38it/s]
+[I 260519 06:50:13 qwen2_5_vl_rekv:275] n_init: 14
+[I 260519 06:50:13 qwen2_5_vl_rekv:275] n_local: 1152
+[I 260519 06:50:13 qwen2_5_vl_rekv:275] fattn: True
+[I 260519 06:50:13 qwen2_5_vl_rekv:275] block_size: 64
+[I 260519 06:50:13 qwen2_5_vl_rekv:275] topk: 36
+[I 260519 06:50:13 qwen2_5_vl_rekv:275] chunk_size: 1
+[I 260519 06:50:13 qwen2_5_vl_rekv:275] max_cached_block: 128
+[I 260519 06:50:13 qwen2_5_vl_rekv:275] exc_block_size: 64
+[I 260519 06:50:13 qwen2_5_vl_rekv:275] pin_memory: True
+[I 260519 06:50:13 qwen2_5_vl_rekv:276] frame_size: 224
+[I 260519 06:50:13 qwen2_5_vl_rekv:277] n_frame_tokens: 64
+[I 260519 06:50:13 qwen2_5_vl_rekv:278] local_block_count: 18
+[I 260519 06:50:13 qwen2_5_vl_rekv:279] internal_block_size: 64
+[case C] fs112@1.0 + fs224@0.75 balanced-highres
+/root/mwnoh/ReKV-var-resolution/model/attention/dot_production_attention/triton_impl.py:458: UserWarning: Triton Attention Output Resources. out of resource: shared memory, Required: 122880, Hardware limit: 101376. Reducing block sizes or `num_stages` may help.
+Use smaller block size 32.
+  warn(f"Triton Attention Output Resources. {E}\nUse smaller block size {_BLOCK_N}.")
