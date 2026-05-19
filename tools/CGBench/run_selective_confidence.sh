@@ -19,7 +19,11 @@ BASE_SAVE_DIR="${BASE_SAVE_DIR:-${BASE_SAVE_ROOT}/${SPLIT}}"
 OUTPUT_DIR="${OUTPUT_DIR:-/root/mwnoh/ReKV-var-resolution/results}"
 
 VQA_MODEL="${VQA_MODEL:-qwen2_5_vl_7b}"
-SAMPLE_FPS="${SAMPLE_FPS:-1}"
+SAMPLE_FPS="${SAMPLE_FPS:-}"
+FS112_SAMPLE_FPS="${FS112_SAMPLE_FPS:-${SAMPLE_FPS:-2}}"
+FS224_SAMPLE_FPS="${FS224_SAMPLE_FPS:-${SAMPLE_FPS:-0.5}}"
+FS112_FPS_TAG="fps${FS112_SAMPLE_FPS//./p}"
+FS224_FPS_TAG="fps${FS224_SAMPLE_FPS//./p}"
 RETRIEVE_CHUNK_SIZE="${RETRIEVE_CHUNK_SIZE:-1}"
 DEBUG="${DEBUG:-False}"
 SAVE_CHOICE_SCORES="${SAVE_CHOICE_SCORES:-True}"
@@ -63,13 +67,13 @@ esac
 
 ANNO_SRC="${ANNO_SRC:-${DEFAULT_ANNO_SRC}}"
 ANNO_PATH="${ANNO_PATH:-${DEFAULT_ANNO_PATH}}"
-CSV_112="${CSV_112:-${BASE_SAVE_DIR}/fs112_lb72_rs144/1_0.csv}"
-CSV_224="${CSV_224:-${BASE_SAVE_DIR}/fs224_lb18_rs36/1_0.csv}"
+CSV_112="${CSV_112:-${BASE_SAVE_DIR}/fs112_lb72_rs144_${FS112_FPS_TAG}/1_0.csv}"
+CSV_224="${CSV_224:-${BASE_SAVE_DIR}/fs224_lb18_rs36_${FS224_FPS_TAG}/1_0.csv}"
 OUTPUT_FILTER_SUFFIX=""
 if [[ "${EXAMPLE_FILTER}" != "all" ]]; then
   OUTPUT_FILTER_SUFFIX="_${EXAMPLE_FILTER}"
 fi
-ROUTER_OUTPUT="${ROUTER_OUTPUT:-${OUTPUT_DIR}/selective_confidence_cgbench_${SPLIT}${OUTPUT_FILTER_SUFFIX}_${VERIFIER}_${GATE_COLUMN}_${GATE_THRESHOLD}.csv}"
+ROUTER_OUTPUT="${ROUTER_OUTPUT:-${OUTPUT_DIR}/selective_confidence_cgbench_${SPLIT}_${FS112_FPS_TAG}_${FS224_FPS_TAG}${OUTPUT_FILTER_SUFFIX}_${VERIFIER}_${GATE_COLUMN}_${GATE_THRESHOLD}.csv}"
 
 flag_enabled() {
   case "${1:-}" in
@@ -123,20 +127,22 @@ run_scores() {
   local frame_size="$2"
   local local_block_count="$3"
   local retrieve_size="$4"
-  local save_dir="${BASE_SAVE_DIR}/fs${frame_size}_lb${local_block_count}_rs${retrieve_size}"
+  local sample_fps="$5"
+  local fps_tag="fps${sample_fps//./p}"
+  local save_dir="${BASE_SAVE_DIR}/fs${frame_size}_lb${local_block_count}_rs${retrieve_size}_${fps_tag}"
   local -a extra_args=()
 
   if [[ -n "${START_VIDEO_ID}" ]]; then
     extra_args+=(--start_video_id "${START_VIDEO_ID}")
   fi
 
-  echo "==== CGBench ${SPLIT} score run fs${frame_size}_lb${local_block_count}_rs${retrieve_size} cuda=${cuda_devices} ===="
+  echo "==== CGBench ${SPLIT} score run fs${frame_size}_lb${local_block_count}_rs${retrieve_size} sample_fps=${sample_fps} cuda=${cuda_devices} ===="
   echo "==== anno_path=${ANNO_PATH} ===="
   echo "==== video_dir=${VIDEO_DIR} ===="
   echo "==== save_dir=${save_dir} ===="
 
   CUDA_VISIBLE_DEVICES="${cuda_devices}" "${PYTHON_BIN}" "${PROGRAM}" \
-    --sample_fps "${SAMPLE_FPS}" \
+    --sample_fps "${sample_fps}" \
     --save_dir "${save_dir}" \
     --anno_path "${ANNO_PATH}" \
     --model "${VQA_MODEL}" \
@@ -158,9 +164,10 @@ run_score_pair() {
   prepare_annotation
 
   echo "==== Launching CGBench ${SPLIT} score runs in parallel ===="
-  run_scores "${GPU_FS112}" 112 72 144 &
+  echo "==== fs112 sample_fps=${FS112_SAMPLE_FPS}; fs224 sample_fps=${FS224_SAMPLE_FPS} ===="
+  run_scores "${GPU_FS112}" 112 72 144 "${FS112_SAMPLE_FPS}" &
   pid112=$!
-  run_scores "${GPU_FS224}" 224 18 36 &
+  run_scores "${GPU_FS224}" 224 18 36 "${FS224_SAMPLE_FPS}" &
   pid224=$!
 
   wait "${pid112}" || status112=$?

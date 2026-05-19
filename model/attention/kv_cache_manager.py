@@ -1,5 +1,6 @@
 import math
 import os
+import time
 import torch
 from typing import Optional, Tuple
 
@@ -108,6 +109,77 @@ class MemoryUnit:
         return self.gpu_data
 
     # Clear the KV-Cache stored on GPU
+    def offload(self):
+        assert self.gpu_data is not None
+        self.event.wait()
+        self.gpu_data = None
+        self.cache.delete(self.gpu_data_id)
+        self.gpu_data_id = None
+
+    def calculate_cpu_memory(self):
+        return len(self.cpu_data) * self.cpu_data[0].numel() * self.cpu_data[0].element_size()
+
+
+class MemoryUnitView:
+    def __init__(
+        self,
+        cpu_data: Tuple[torch.Tensor, torch.Tensor],
+        cache: CudaCache,
+        cpu_event: Optional[torch.cuda.Event] = None,
+    ):
+        self.cache = cache
+        self.cpu_data = cpu_data
+        self.cpu_event = cpu_event
+        self.gpu_data = None
+        self.gpu_data_id = None
+        self.event = None
+
+    def _wait_cpu_data(self):
+        if self.cpu_event is not None:
+            torch.cuda.current_stream().wait_event(self.cpu_event)
+
+    def load(self, target: Optional[Tuple[torch.Tensor, torch.Tensor]] = None) -> bool:
+        if self.gpu_data is not None:
+            if self.event is not None:
+                torch.cuda.current_stream().wait_event(self.event)
+            if target is not None:
+                target[0].copy_(self.gpu_data[0], non_blocking=True)
+                target[1].copy_(self.gpu_data[1], non_blocking=True)
+                target_event = torch.cuda.Event()
+                target_event.record(torch.cuda.current_stream())
+            else:
+                target_event = None
+
+            return False, target_event
+
+        self._wait_cpu_data()
+        gpu_data, gpu_data_id = self.cache.alloc()
+        gpu_data = gpu_data.view((2,) + self.cpu_data[0].shape)
+        if target is not None:
+            target[0].copy_(self.cpu_data[0], non_blocking=True)
+            target[1].copy_(self.cpu_data[1], non_blocking=True)
+            target_event = torch.cuda.Event()
+            target_event.record(torch.cuda.current_stream())
+            gpu_data[0].copy_(target[0], non_blocking=True)
+            gpu_data[1].copy_(target[1], non_blocking=True)
+        else:
+            gpu_data[0].copy_(self.cpu_data[0], non_blocking=True)
+            gpu_data[1].copy_(self.cpu_data[1], non_blocking=True)
+            target_event = None
+
+        event = torch.cuda.Event()
+        event.record(torch.cuda.current_stream())
+        self.event = event
+        self.gpu_data = gpu_data
+        self.gpu_data_id = gpu_data_id
+
+        return True, target_event
+
+    def get(self):
+        assert self.gpu_data is not None
+        self.event.wait()
+        return self.gpu_data
+
     def offload(self):
         assert self.gpu_data is not None
         self.event.wait()
@@ -361,7 +433,18 @@ class ContextManager:
         self.load_count = 0
         self.async_global_stream = async_global_stream
         self.pin_memory = pin_memory
+        self.defer_offload_wait = os.getenv("REKV_DEFER_OFFLOAD_WAIT", "0") == "1"
+        self.profile_append_global = os.getenv("REKV_PROFILE_APPEND_GLOBAL", "0") == "1"
+        self.profile_append_global_events = []
+        self.profile_internal_blocks = os.getenv("REKV_PROFILE_INTERNAL_BLOCKS", "0") == "1"
+        self.profile_internal_block_records = []
+        self._profile_append_call_idx = 0
+        self._current_internal_block_record = None
         self.use_batched_retrieval_io = os.getenv("REKV_BATCHED_RETRIEVAL_IO", "0") == "1"
+        self.offload_granularity = os.getenv("REKV_OFFLOAD_GRANULARITY", "block")
+        if self.offload_granularity not in ("block", "chunk"):
+            raise ValueError(f"Unsupported REKV_OFFLOAD_GRANULARITY={self.offload_granularity!r}")
+        self.batched_offload_copy = os.getenv("REKV_BATCHED_OFFLOAD_COPY", "0") == "1"
         global GLOBAL_STREAM
         if self.async_global_stream and GLOBAL_STREAM is None:
             GLOBAL_STREAM = torch.cuda.Stream()
@@ -736,13 +819,32 @@ class ContextManager:
             get_score=False, sliding_window=self.n_local
         )
 
+        profile_record = self._current_internal_block_record
+        if profile_record is not None:
+            profile_record.setdefault("cuda_events", {})
+
         # load init KV
         with torch.cuda.stream(GLOBAL_STREAM):
+            if profile_record is not None:
+                profile_start = torch.cuda.Event(enable_timing=True)
+                profile_start.record(GLOBAL_STREAM)
             global_h_q = global_q
             global_h_k, global_h_v = self.get_global_hidden_and_mask(exc_length=global_q.size(-2))
+            if profile_record is not None:
+                profile_end = torch.cuda.Event(enable_timing=True)
+                profile_end.record(GLOBAL_STREAM)
+                profile_record["cuda_events"]["global_prep_gpu"] = (profile_start, profile_end)
 
         if self.async_global_stream:
-            torch.cuda.current_stream().wait_stream(GLOBAL_STREAM)
+            current_stream = torch.cuda.current_stream()
+            if profile_record is not None:
+                profile_start = torch.cuda.Event(enable_timing=True)
+                profile_start.record(current_stream)
+            current_stream.wait_stream(GLOBAL_STREAM)
+            if profile_record is not None:
+                profile_end = torch.cuda.Event(enable_timing=True)
+                profile_end.record(current_stream)
+                profile_record["cuda_events"]["global_prep_wait_gpu"] = (profile_start, profile_end)
 
         # input Q attends to init KV
         attn.append(
@@ -760,6 +862,75 @@ class ContextManager:
 
         return o.view((self.batch_size, self.num_heads, -1, self.dim_head))
 
+    def _block_view(self, tensor, st, num_blocks):
+        ed = st + num_blocks * self.block_size
+        tensor = tensor[:, st:ed, :].contiguous()
+        tensor = tensor.view(self.unit_size_kv, num_blocks, self.block_size, self.dim_head)
+        return tensor.permute(1, 0, 2, 3).contiguous()
+
+    def _copy_blocks_to_cpu(self, tensor):
+        if self.pin_memory:
+            cpu_tensor = torch.empty(
+                tensor.shape,
+                dtype=tensor.dtype,
+                device="cpu",
+                pin_memory=True,
+            )
+            cpu_tensor.copy_(tensor, non_blocking=True)
+            return cpu_tensor
+        return tensor.to("cpu", non_blocking=True)
+
+    def _append_representative_keys(self, global_remainder_st, num_blocks):
+        ed = global_remainder_st + num_blocks * self.block_size
+        global_block_k = self.global_remainder[0][:, :, global_remainder_st:ed, :]
+        global_block_k = self._from_group_kv(global_block_k)
+        global_block_k = global_block_k.contiguous().view(
+            self.num_units,
+            self.num_heads,
+            num_blocks,
+            self.block_size,
+            self.dim_head,
+        )
+        global_block_k = global_block_k.mean(dim=3)
+        global_block_k = global_block_k.permute(0, 2, 1, 3).reshape(
+            self.num_units,
+            num_blocks,
+            self.num_heads * self.dim_head,
+        )
+        for u in range(self.num_units):
+            self.block_k[u].append(global_block_k[u].contiguous())
+
+    def _append_global_batched(
+        self,
+        global_remainder_st,
+        num_blocks,
+    ):
+        for u in range(self.num_units):
+            block_k = self._block_view(self.global_remainder[0][u], global_remainder_st, num_blocks)
+            block_v = self._block_view(self.global_remainder[1][u], global_remainder_st, num_blocks)
+            if self.use_batched_retrieval_io:
+                self.offloaded_block_k[u].append(block_k)
+                self.offloaded_block_v[u].append(block_v)
+            else:
+                cpu_k = self._copy_blocks_to_cpu(block_k)
+                cpu_v = self._copy_blocks_to_cpu(block_v)
+                cpu_event = torch.cuda.Event()
+                cpu_event.record(torch.cuda.current_stream())
+                for block_idx in range(num_blocks):
+                    self.global_blocks[u].append(
+                        MemoryUnitView(
+                            (
+                                cpu_k[block_idx],
+                                cpu_v[block_idx],
+                            ),
+                            self.cuda_cache,
+                            cpu_event,
+                        )
+                    )
+
+        self._append_representative_keys(global_remainder_st, num_blocks)
+        self.num_global_block += num_blocks
+
     def _append_global(
         self
     ):
@@ -774,6 +945,12 @@ class ContextManager:
         # offload context KV to CPU
         if self.init_exc:
             num_full_blocks = global_remainder_len // self.block_size
+            if self.batched_offload_copy and num_full_blocks > 0:
+                self._append_global_batched(global_remainder_st, num_full_blocks)
+                global_remainder_st += num_full_blocks * self.block_size
+                global_remainder_len -= num_full_blocks * self.block_size
+                num_full_blocks = 0
+
             while num_full_blocks > 0:
                 num_full_blocks -= 1
                 global_remainder_len -= self.block_size
@@ -799,20 +976,64 @@ class ContextManager:
                         ))
 
                 # NOTE: the average of global_remainder is used as the representative vector.
-                global_block_k = self.global_remainder[0][:, :, global_remainder_st:global_remainder_st + self.block_size, :]
-                global_block_k = self._from_group_kv(global_block_k)  # (batch_size, num_heads, length, dim_head)
-
-                global_block_k = global_block_k.mean(dim=-2, keepdim=False)  # (batch_size, num_heads, dim_head)
-                global_block_k = global_block_k.reshape(self.num_units, -1)  # (batch_size, num_heads * dim_head)
-                global_block_k = global_block_k[:, None, :]  # (batch_size, 1, num_heads * dim_head)
-                for u in range(self.num_units):
-                    self.block_k[u].append(global_block_k[u])
+                self._append_representative_keys(global_remainder_st, 1)
                 
                 self.num_global_block += 1
                 global_remainder_st += self.block_size
 
         self._global_remainder_ed = global_remainder_ed
         self._global_remainder_st = global_remainder_st
+
+    def _append_global_profiled(self, profile_record):
+        num_global_block_before = self.num_global_block
+        offload_wall_start = time.perf_counter() if profile_record is not None else None
+        with torch.cuda.stream(GLOBAL_STREAM):
+            if profile_record is not None:
+                profile_start = torch.cuda.Event(enable_timing=True)
+                profile_end = torch.cuda.Event(enable_timing=True)
+                profile_start.record(GLOBAL_STREAM)
+                self._append_global()
+                profile_end.record(GLOBAL_STREAM)
+                profile_record["cuda_events"]["offload_gpu"] = (profile_start, profile_end)
+            elif self.profile_append_global:
+                profile_start = torch.cuda.Event(enable_timing=True)
+                profile_end = torch.cuda.Event(enable_timing=True)
+                profile_start.record(GLOBAL_STREAM)
+                self._append_global()
+                profile_end.record(GLOBAL_STREAM)
+                self.profile_append_global_events.append((profile_start, profile_end))
+            else:
+                self._append_global()
+
+        if profile_record is not None:
+            offload_blocks = max(0, self.num_global_block - num_global_block_before)
+            profile_record["num_global_block_after"] = int(self.num_global_block)
+            profile_record["offload_blocks"] = int(offload_blocks)
+            profile_record["offload_bytes"] = int(
+                offload_blocks
+                * self.num_units
+                * self.unit_size_kv
+                * self.block_size
+                * self.dim_head
+                * self.global_remainder[0].element_size()
+                * 2
+            )
+            profile_record["offload_enqueue_wall_ms"] = (
+                time.perf_counter() - offload_wall_start
+            ) * 1000.0
+
+        if self.async_global_stream and not self.defer_offload_wait:
+            current_stream = torch.cuda.current_stream()
+            if profile_record is not None:
+                profile_start = torch.cuda.Event(enable_timing=True)
+                profile_start.record(current_stream)
+            current_stream.wait_stream(GLOBAL_STREAM)
+            if profile_record is not None:
+                profile_end = torch.cuda.Event(enable_timing=True)
+                profile_end.record(current_stream)
+                profile_record["cuda_events"]["post_offload_wait_gpu"] = (profile_start, profile_end)
+        elif profile_record is not None:
+            profile_record["post_offload_wait_deferred"] = True
 
     def append(
         self,
@@ -853,26 +1074,61 @@ class ContextManager:
             )
 
         o_list = []
-        for st in range(0, input_length, self.exc_block_size):  # Process the input tokens in blocks.
+        append_call_idx = self._profile_append_call_idx
+        if self.profile_internal_blocks:
+            self._profile_append_call_idx += 1
+
+        last_profile_record = None
+        for block_idx, st in enumerate(range(0, input_length, self.exc_block_size)):  # Process the input tokens in blocks.
             ed = min(st + self.exc_block_size, input_length)
+            profile_record = None
+            if self.profile_internal_blocks:
+                profile_record = {
+                    "append_call": int(append_call_idx),
+                    "block_index": int(block_idx),
+                    "token_st": int(st),
+                    "token_ed": int(ed),
+                    "tokens": int(ed - st),
+                    "input_length": int(input_length),
+                    "cache_length_before_append": int(self.length),
+                    "global_remainder_st_before": int(self._global_remainder_st),
+                    "global_remainder_ed_before": int(self._global_remainder_ed),
+                    "num_global_block_before": int(self.num_global_block),
+                    "cuda_events": {},
+                }
 
             # calculate attention results
             kv_st = max(kv_length + st - input_length - self.n_local, 0)
             kv_ed = kv_length + ed - input_length
-            chunk_o = self._append(
-                local_q[:, :, st:ed, :],
-                self.local_k[:, :, kv_st: kv_ed, :],
-                self.local_v[:, :, kv_st: kv_ed, :],
-                global_q[:, :, st:ed, :],
-            )
+            if profile_record is not None:
+                profile_start = torch.cuda.Event(enable_timing=True)
+                profile_start.record(torch.cuda.current_stream())
+                self._current_internal_block_record = profile_record
+            try:
+                chunk_o = self._append(
+                    local_q[:, :, st:ed, :],
+                    self.local_k[:, :, kv_st: kv_ed, :],
+                    self.local_v[:, :, kv_st: kv_ed, :],
+                    global_q[:, :, st:ed, :],
+                )
+            finally:
+                self._current_internal_block_record = None
+            if profile_record is not None:
+                profile_end = torch.cuda.Event(enable_timing=True)
+                profile_end.record(torch.cuda.current_stream())
+                profile_record["cuda_events"]["block_compute_gpu"] = (profile_start, profile_end)
             o_list.append(chunk_o)
 
             # offload context memory
-            with torch.cuda.stream(GLOBAL_STREAM):
-                self._append_global()
+            if self.offload_granularity == "block":
+                self._append_global_profiled(profile_record)
 
-            if self.async_global_stream:
-                torch.cuda.current_stream().wait_stream(GLOBAL_STREAM)
+            if profile_record is not None:
+                self.profile_internal_block_records.append(profile_record)
+                last_profile_record = profile_record
+
+        if self.offload_granularity == "chunk":
+            self._append_global_profiled(last_profile_record)
 
         self.length += input_length
 
